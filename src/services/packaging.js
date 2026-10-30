@@ -6,7 +6,7 @@ import { ytGet, ytWrite, suggest } from '../youtube/client.js';
 import { getVideo } from './channels.js';
 import * as ai from './ai.js';
 
-const POWER_WORDS = ['secret', 'truth', 'never', 'mistake', 'finally', 'proven', 'nobody', 'actually', 'hidden', 'ultimate', 'real', 'exposed', 'shocking', 'free', 'fast', 'simple', 'easy', 'why', 'how', 'stop', 'instantly', 'worst', 'best', 'only', 'new', 'warning'];
+const POWER_WORDS = ['secret', 'truth', 'never', 'mistake', 'finally', 'proven', 'nobody', 'actually', 'hidden', 'ultimate', 'real', 'exposed', 'shocking', 'free', 'fast', 'simple', 'easy', 'why', 'how', 'stop', 'instantly', 'worst', 'best', 'only', 'new', 'warning', 'terrifying', 'scary', 'creepy', 'insane', 'unbelievable', 'deadly', 'dangerous', 'forbidden', 'cursed', 'mysterious', 'disturbing'];
 const STOP = new Set(['the', 'a', 'an', 'and', 'or', 'of', 'to', 'in', 'on', 'for', 'with', 'is', 'are', 'this', 'that', 'it', 'my', 'your', 'you', 'i', 'we', 'at', 'by', 'from', 'as', 'be']);
 
 /** Heuristic title analysis. Every check is named so the creator can judge it; no CTR prediction is claimed. */
@@ -77,17 +77,51 @@ export function validateChapters(text = '') {
 }
 
 /** Candidate tags from title/description terms + autocomplete; no ranking promises. */
+// Channel/creator names YouTube autocomplete appends to a seed ("<topic> sam and colby"). Using another creator's
+// name as a tag is misleading metadata under YouTube policy, so those suggestions are dropped. Names come from
+// channels TubeDesk already knows (owned + competitors) and from cached search results — no extra quota.
+export function knownChannelNames() {
+  const names = new Set();
+  try { for (const r of db.prepare('SELECT title FROM channels').all()) if (r.title) names.add(r.title); } catch {}
+  try {
+    const rows = db.prepare(`SELECT value FROM api_cache WHERE value LIKE '%"channelTitle"%' LIMIT 400`).all();
+    for (const r of rows) for (const m of r.value.matchAll(/"channelTitle"\s*:\s*"((?:[^"\\]|\\.)*)"/g)) names.add(m[1]);
+  } catch {}
+  return [...names];
+}
+const normTag = s => String(s || '').toLowerCase().normalize('NFKD').replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+export function filterTagCandidates(candidates, { channelNames = [], maxWords = 6, maxChars = 60 } = {}) {
+  const names = channelNames.map(normTag).filter(n => n.length >= 4);
+  const kept = [], excluded = [];
+  for (const raw of candidates) {
+    const t = normTag(raw);
+    if (!t) continue;
+    if (t.split(' ').length > maxWords || t.length > maxChars) { excluded.push({ tag: raw, reason: 'too long / title fragment' }); continue; }
+    const hit = names.find(n => ` ${t} `.includes(` ${n} `));
+    if (hit) { excluded.push({ tag: raw, reason: `names another channel (${hit})` }); continue; }
+    if (!kept.includes(t)) kept.push(t);
+  }
+  return { kept, excluded };
+}
+// Seed from the title: the part before a real separator. Split on ":" "|" "(" "?" "!" "…" or a spaced dash,
+// never on a hyphen inside a word ("Time-Traveled"), so seeds are whole phrases, not fragments.
+export function titleSeed(title = '') {
+  const seed = String(title).split(/\s[-–—]\s|[:|(?!…]/)[0].trim();
+  return seed.split(/\s+/).length <= 6 ? seed : '';
+}
+
 export async function suggestTags({ title = '', description = '', keyword = '', country = 'US' }) {
   const text = `${title} ${description}`.toLowerCase().replace(/[^\w\s]/g, ' ');
   const freq = {};
   for (const w of text.split(/\s+/)) if (w.length > 3 && !STOP.has(w)) freq[w] = (freq[w] || 0) + 1;
   const topWords = Object.entries(freq).sort((a, b) => b[1] - a[1]).slice(0, 8).map(x => x[0]);
-  const seeds = [keyword, title.split(/[:|\-–(]/)[0]].filter(Boolean).map(s => s.trim()).filter(Boolean);
+  const seeds = [keyword, titleSeed(title)].filter(Boolean).map(s => s.trim()).filter(Boolean);
   const sugg = (await Promise.all(seeds.map(s => suggest(s, { country })))).flat();
-  const candidates = [...new Set([...seeds, ...sugg, ...topWords, ...topWords.slice(0, 3).map((w, i) => topWords[i + 1] ? `${w} ${topWords[i + 1]}` : null).filter(Boolean)])].map(t => t.toLowerCase().trim());
+  const candidates = [...new Set([...seeds, ...sugg, ...topWords, ...topWords.slice(0, 3).map((w, i) => topWords[i + 1] ? `${w} ${topWords[i + 1]}` : null).filter(Boolean)])];
+  const { kept, excluded } = filterTagCandidates(candidates, { channelNames: knownChannelNames() });
   let total = 0; const tags = [];
-  for (const c of candidates) { if (total + c.length + 1 > 480) break; tags.push(c); total += c.length + 1; }
-  return { tags, charactersUsed: total, limit: 500, note: 'Tags are a weak ranking signal; use them for misspellings and alternate phrasings. The 500-character limit is enforced here.' };
+  for (const c of kept) { if (total + c.length + 1 > 480) break; tags.push(c); total += c.length + 1; }
+  return { tags, excluded, charactersUsed: total, limit: 500, note: 'Tags are a weak ranking signal; use them for misspellings and alternate phrasings. Suggestions naming other channels are removed (misleading metadata). The 500-character limit is enforced here.' };
 }
 
 /** Publishing checklist for a synced video. */

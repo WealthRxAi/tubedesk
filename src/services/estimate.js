@@ -15,7 +15,7 @@ const HINTS = [
   ['Business / marketing', /\b(marketing|startup|saas|entrepreneur|dropship|ecommerce|shopify|sales funnel|seo|agency|side hustle|business)\b/i],
   ['Technology / software', /\b(ai|chatgpt|claude|gpt|llm|openai|software|coding|programming|python|javascript|developer|app|iphone|android|laptop|gpu|tech)\b/i],
   ['Health & fitness', /\b(workout|fitness|gym|diet|protein|weight loss|yoga|keto|calories|health|doctor|nutrition)\b/i],
-  ['Education & science', /\b(science|physics|history|math|space|nasa|biology|chemistry|explained|documentary|lecture|tutorial)\b/i],
+  ['Education & science', /\b(science|physics|history|historical|ancient|medieval|victorian|century|empire|pharaoh|egypt|roman|rome|viking|vikings|dynasty|battle|war|ww1|ww2|wwii|time travel(?:led|ed)?|time-travel(?:led|ed)?|time traveller|\d{2,4}\s?(?:bc|ad)|math|space|nasa|biology|chemistry|explained|documentary|lecture|tutorial)\b/i],
   ['Food & cooking', /\b(recipe|cooking|baking|kitchen|chef|meal prep)\b/i],
   ['Travel', /\b(travel|trip|vlog in|visiting|tour of|flight|hotel)\b/i],
   ['Gaming', /\b(minecraft|fortnite|roblox|gameplay|gaming|playthrough|speedrun|ps5|xbox|nintendo)\b/i],
@@ -23,11 +23,24 @@ const HINTS = [
   ['Pets & animals', /\b(dog|puppy|cat|kitten|pet|aquarium|horse)\b/i],
 ];
 
+// Score every niche by how many hint words it matches and take the strongest, instead of the first niche that
+// matches at all. First-match let one stray word decide a whole channel (e.g. a history channel with one "app"
+// title was filed under Technology). Ties keep HINTS order; no match falls back to the YouTube category.
+export function nicheScores(text) {
+  const scores = {};
+  for (const [niche, re] of HINTS) {
+    const n = (text.match(new RegExp(re.source, 'gi')) || []).length;
+    if (n) scores[niche] = n;
+  }
+  return scores;
+}
 export function nicheFor({ categoryId, title = '', tags = [], description = '', isShort = false }) {
   if (isShort) return 'Shorts (any niche)';
   const text = `${title} ${(tags || []).join(' ')} ${(description || '').slice(0, 300)}`;
-  for (const [niche, re] of HINTS) if (re.test(text)) return niche;
-  return CATEGORY_NICHE[String(categoryId)] || 'Entertainment / vlogs';
+  const scores = nicheScores(text);
+  let best = null;
+  for (const [niche] of HINTS) if (scores[niche] && (!best || scores[niche] > scores[best])) best = niche;
+  return best || CATEGORY_NICHE[String(categoryId)] || 'Entertainment / vlogs';
 }
 
 export function estVideoRevenue(v) {

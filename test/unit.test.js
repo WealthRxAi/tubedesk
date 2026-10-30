@@ -127,3 +127,27 @@ test('revenue estimator: niche detection, video range, channel monthly', async (
   assert.ok(m.monthlyViews > 30000 && m.monthlyViews < 90000, `monthly views ${m.monthlyViews}`);
   assert.ok(m.low > 0 && m.high > m.low && m.yearlyHigh === Math.round(m.monthlyViews * 12 / 1000 * 25 * 100) / 100 && m.shortsShare === 0);
 });
+
+test('niche detection scores all hints instead of first match', async () => {
+  const { nicheFor } = await import('../src/services/estimate.js');
+  const titles = 'I time travelled to Ancient Egypt in 2400BC | I time travelled to the Battle of Hastings in 1066 | I visited Pompeii during its last 48 hours | I built an app for Ancient Rome | I time travelled to Victorian London';
+  assert.equal(nicheFor({ categoryId: '22', title: titles }), 'Education & science');
+  assert.equal(nicheFor({ categoryId: '28', title: 'Claude Code tutorial: build an app with AI' }), 'Technology / software');
+  assert.equal(nicheFor({ categoryId: '24', title: 'my weekend' }), 'Entertainment / vlogs');
+});
+test('tag filter drops other creators and title fragments', async () => {
+  const { filterTagCandidates, titleSeed } = await import('../src/services/packaging.js');
+  const { kept, excluded } = filterTagCandidates([
+    'lizzie borden house', 'lizzie borden house sam and colby', 'lizzie borden house ghost adventures',
+    'is the lizzie borden house haunted we time traveled to find out today', 'Lizzie Borden House Haunted',
+  ], { channelNames: ['Sam and Colby', 'Ghost Adventures', 'BuzzFeed Unsolved Network'] });
+  assert.deepEqual(kept, ['lizzie borden house', 'lizzie borden house haunted']);
+  assert.equal(excluded.length, 3);
+  assert.ok(excluded.some(e => /sam and colby/.test(e.reason)));
+  assert.equal(titleSeed('Is the Lizzie Borden House Haunted? We Time-Traveled to Find Out'), 'Is the Lizzie Borden House Haunted');
+  assert.equal(titleSeed('Lizzie Borden House: 1892 vs Tonight'), 'Lizzie Borden House');
+});
+test('power words include horror vocabulary', () => {
+  const a = analyzeTitle('Lizzie Borden House: 4 Terrifying Signs in 1 Night', { keyword: 'lizzie borden house' });
+  assert.ok(a.checks.find(c => c.name.startsWith('Uses 1–2 emotional/power words')).pass);
+});

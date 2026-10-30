@@ -51,7 +51,7 @@ npm install
 npm start            # http://localhost:4949
 ```
 
-`npm test` runs 24 backend tests against a built-in mock of the YouTube APIs. `python3 test/ui-smoke.py` drives every screen in headless Chromium and `xvfb-run python3 test/ext-smoke.py` loads the extension against fake YouTube pages (both need `pip install playwright && playwright install chromium`).
+`npm test` runs 27 backend tests against a built-in mock of the YouTube APIs. `python3 test/ui-smoke.py` drives every screen in headless Chromium and `xvfb-run python3 test/ext-smoke.py` loads the extension against fake YouTube pages (both need `pip install playwright && playwright install chromium`).
 
 ### Run it permanently on a Mac (launchd)
 
