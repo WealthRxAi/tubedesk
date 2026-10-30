@@ -1,0 +1,19 @@
+{
+  "name": "tubedesk",
+  "version": "1.1.0",
+  "description": "Self-hosted YouTube channel intelligence desk: analytics, keyword research, outliers, competitors, packaging, AI coaching and comment tools for channels you own.",
+  "type": "module",
+  "private": true,
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test test/*.test.js",
+    "snapshot": "node src/jobs/run-snapshot.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.7.0",
+    "express": "^4.21.2",
+    "node-cron": "^3.0.3"
+  }
+}

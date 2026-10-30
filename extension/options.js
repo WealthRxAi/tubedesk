@@ -1,0 +1,2 @@
+chrome.storage.sync.get('tdBase', ({ tdBase }) => { document.getElementById('base').value = tdBase || 'http://localhost:4949'; });
+document.getElementById('save').onclick = () => { chrome.storage.sync.set({ tdBase: document.getElementById('base').value.trim() || 'http://localhost:4949' }, () => { document.getElementById('msg').textContent = 'Saved'; document.getElementById('msg').className = 'ok'; }); };

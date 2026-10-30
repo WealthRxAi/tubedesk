@@ -1,0 +1,44 @@
+.td-root { font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Inter", Roboto, Arial, sans-serif; color: #e7eaf0; background: #161a21; border: 1px solid #262c37; border-radius: 12px; padding: 12px 14px; margin: 12px 0; box-sizing: border-box; }
+.td-root * { box-sizing: border-box; }
+.td-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.td-brand { display: flex; align-items: center; gap: 7px; font-weight: 700; font-size: 13px; }
+.td-logo { width: 16px; height: 16px; border-radius: 4px; background: #e8503a; position: relative; display: inline-block; }
+.td-logo:after { content: ""; position: absolute; left: 6px; top: 4px; border-left: 6px solid #fff; border-top: 4px solid transparent; border-bottom: 4px solid transparent; }
+.td-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.td-stat { background: #0f1115; border: 1px solid #262c37; border-radius: 8px; padding: 8px 10px; }
+.td-stat .v { font-size: 18px; font-weight: 700; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
+.td-stat .l { font-size: 11px; color: #7a8494; margin-top: 2px; }
+.td-stat.ok .v { color: #3fbf7f; } .td-stat.bad .v { color: #e8503a; } .td-stat.warn .v { color: #f0b24a; }
+.td-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
+.td-btn { background: #1d222b; color: #e7eaf0; border: 1px solid #323a48; border-radius: 8px; padding: 6px 10px; font: inherit; font-size: 12px; cursor: pointer; text-decoration: none; }
+.td-btn:hover { border-color: #7a8494; }
+.td-btn.primary { background: #e8503a; border-color: #e8503a; color: #fff; font-weight: 600; }
+.td-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+.td-tag { background: #1d222b; border: 1px solid #323a48; border-radius: 999px; padding: 2px 8px; font-size: 11.5px; color: #aab2c0; }
+.td-note { color: #7a8494; font-size: 11.5px; margin-top: 8px; }
+.td-err { color: #e8503a; font-size: 12px; }
+.td-badge { display: inline-block; font-size: 11px; padding: 2px 7px; border-radius: 999px; background: #1d222b; border: 1px solid #323a48; color: #aab2c0; }
+.td-badge.ok { color: #3fbf7f; } .td-badge.warn { color: #f0b24a; } .td-badge.bad { color: #e8503a; }
+.td-bar { height: 6px; background: #1d222b; border-radius: 3px; overflow: hidden; margin-top: 4px; }
+.td-bar i { display: block; height: 100%; background: #5aa9ff; }
+#td-search { margin: 0 0 12px; }
+.td-mini { font-size: 11px; color: #7a8494; }
+#td-channel { margin: 12px 24px; }
+.td-stat.money .v { color: #5aa9ff; }
+.td-sub { margin-top: 12px; padding-top: 12px; border-top: 1px solid #262c37; }
+.td-subhead { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; }
+.td-subhead img { width: 40px; height: 40px; border-radius: 50%; }
+.td-subhead .t { font-weight: 700; } .td-subhead .m { font-size: 11.5px; color: #7a8494; }
+.td-label { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: #7a8494; margin: 10px 0 4px; }
+.td-list { display: flex; flex-direction: column; gap: 4px; }
+.td-item { display: grid; grid-template-columns: 56px minmax(0,1fr) auto 48px auto; gap: 8px; align-items: center; padding: 4px 6px; border-radius: 8px; text-decoration: none; color: inherit; }
+.td-item:hover { background: #1d222b; }
+.td-item img { width: 56px; height: 32px; object-fit: cover; border-radius: 4px; }
+.td-item .t { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.td-item .m { font-size: 11px; color: #7a8494; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.td-item .x { font-weight: 700; font-size: 12px; font-variant-numeric: tabular-nums; min-width: 42px; text-align: right; }
+.td-item .x.ok { color: #3fbf7f; } .td-item .x.bad { color: #e8503a; }
+.td-chip { position: absolute; left: 4px; bottom: 4px; z-index: 5; display: flex; gap: 6px; align-items: center; padding: 2px 6px; border-radius: 6px; background: rgba(15,17,21,.88); color: #e7eaf0; font: 600 11px/1.3 -apple-system, BlinkMacSystemFont, "Inter", Roboto, Arial, sans-serif; font-variant-numeric: tabular-nums; pointer-events: auto; backdrop-filter: blur(2px); }
+.td-chip .ok { color: #3fbf7f; } .td-chip .bad { color: #e8503a; } .td-chip .money { color: #5aa9ff; }
+.td-chip.muted { color: #7a8494; font-weight: 500; }
+ytd-compact-video-renderer .td-chip, ytd-reel-item-renderer .td-chip, ytm-shorts-lockup-view-model .td-chip { font-size: 10px; gap: 4px; padding: 1px 5px; }

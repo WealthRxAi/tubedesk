@@ -1,0 +1,21 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>TubeDesk</title>
+<style>
+body{width:340px;margin:0;background:#0f1115;color:#e7eaf0;font:13px/1.4 -apple-system,BlinkMacSystemFont,"Inter",Roboto,Arial,sans-serif;padding:12px}
+h1{font-size:14px;margin:0 0 10px;display:flex;align-items:center;gap:7px}
+.logo{width:16px;height:16px;border-radius:4px;background:#e8503a;position:relative;display:inline-block}
+.logo:after{content:"";position:absolute;left:6px;top:4px;border-left:6px solid #fff;border-top:4px solid transparent;border-bottom:4px solid transparent}
+.ch{display:flex;gap:10px;align-items:center;background:#161a21;border:1px solid #262c37;border-radius:10px;padding:10px;margin-bottom:8px}
+.ch img{width:36px;height:36px;border-radius:50%;background:#1d222b}
+.ch .t{font-weight:600}.ch .m{font-size:11.5px;color:#7a8494}
+.score{margin-left:auto;width:38px;height:38px;border-radius:50%;border:3px solid #323a48;display:flex;align-items:center;justify-content:center;font-weight:700}
+.score.good{border-color:#3fbf7f}.score.mid{border-color:#f0b24a}.score.low{border-color:#e8503a}
+.up{color:#3fbf7f}.down{color:#e8503a}
+.row{display:flex;gap:6px;margin-top:8px}
+a.btn{flex:1;text-align:center;background:#1d222b;color:#e7eaf0;border:1px solid #323a48;border-radius:8px;padding:7px;text-decoration:none;font-size:12px}
+.err{color:#e8503a}.mini{font-size:11.5px;color:#7a8494;margin-top:8px}
+.badge{display:inline-block;font-size:10.5px;padding:1px 6px;border-radius:999px;background:#2a1a1a;color:#e8503a;border:1px solid #4a2a2a;margin-left:6px}
+</style></head>
+<body><h1><span class="logo"></span>TubeDesk</h1><div id="out">Loading…</div>
+<div class="row"><a class="btn" id="open" target="_blank">Open desk</a><a class="btn" id="opts" href="#">Options</a></div>
+<script src="popup.js"></script></body></html>

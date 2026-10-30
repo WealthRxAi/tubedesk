@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "TubeDesk for YouTube",
+  "version": "1.1.0",
+  "description": "Stats, outlier context and keyword demand on youtube.com, powered by your local TubeDesk (self-hosted, free).",
+  "icons": { "16": "icons/icon16.png", "32": "icons/icon32.png", "48": "icons/icon48.png", "128": "icons/icon128.png" },
+  "permissions": ["storage"],
+  "host_permissions": ["http://localhost:4949/*", "http://127.0.0.1:4949/*"],
+  "action": { "default_popup": "popup.html", "default_icon": "icons/icon48.png", "default_title": "TubeDesk" },
+  "options_ui": { "page": "options.html", "open_in_tab": false },
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    { "matches": ["https://www.youtube.com/*"], "js": ["content.js"], "css": ["content.css"], "run_at": "document_idle" }
+  ]
+}
