@@ -84,6 +84,9 @@ export async function channelAudit(channelId, { days = 28, retentionLimit = 60, 
         analyticsQuery(channelId, { ...w, metrics: 'views', dimensions: 'video', filters: 'insightTrafficSourceType==ADVERTISING', sort: '-views', maxResults: 200, ttl: 1800 }).catch(e => ({ rows: [], error: e.message })),
       ]);
       advByVideo[name] = Object.fromEntries(adv.rows.map(r => [r.video, r.views]));
+      // Reconcile with the channel-level traffic report: if the channel had advertising views but the per-video split came back empty, say so instead of writing zeros.
+      const chanAdv = await analyticsQuery(channelId, { ...w, metrics: 'views', dimensions: 'insightTrafficSourceType', filters: 'insightTrafficSourceType==ADVERTISING', ttl: 1800 }).then(r => (r.rows[0]?.views || 0)).catch(() => null);
+      if (!adv.error && adv.rows.length === 0 && chanAdv) adv.error = `channel had ${chanAdv} advertising views in this window but the Analytics API returned no per-video rows for insightTrafficSourceType==ADVERTISING; see traffic.windows.${name}.advertising`;
       const map = Object.fromEntries(rows.rows.map(r => [r.video, r]));
       const list = vids.map(v => {
         const r = map[v.id];
