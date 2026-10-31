@@ -51,7 +51,7 @@ npm install
 npm start            # http://localhost:4949
 ```
 
-`npm test` runs 27 backend tests against a built-in mock of the YouTube APIs. `python3 test/ui-smoke.py` drives every screen in headless Chromium and `xvfb-run python3 test/ext-smoke.py` loads the extension against fake YouTube pages (both need `pip install playwright && playwright install chromium`).
+`npm test` runs 28 backend tests against a built-in mock of the YouTube APIs. `python3 test/ui-smoke.py` drives every screen in headless Chromium and `xvfb-run python3 test/ext-smoke.py` loads the extension against fake YouTube pages (both need `pip install playwright && playwright install chromium`).
 
 ### Run it permanently on a Mac (launchd)
 
@@ -76,6 +76,10 @@ Logs: `~/Library/Logs/tubedesk.log`. Remove with `launchctl unload ~/Library/Lau
 **About the revenue numbers.** For channels you don't own, YouTube publishes no revenue, so the extension estimates it the way vidIQ and Social Blade do: public views × an RPM band for the niche (detected from title/tags/category; Shorts get the Shorts band). It's a range, not a measurement. Your own channels' real revenue is under Analytics → Revenue once connected with Google. Thumbnail chips cost 1 quota unit per 50 videos (+1 per 50 channels) and are cached, so an hour of browsing is a few dozen units out of 10,000.
 
 **Updating.** Pull or copy the new files, then Settings → **Restart TubeDesk** (the LaunchAgent relaunches it) and click the reload icon on the extension's card in `chrome://extensions`.
+
+### Audit export
+
+`GET /api/export/audit/<channelId>` writes `data/exports/<handle>-tubedesk-audit.json`: channel identity, the full synced catalogue (id, title, URL, date, duration, format, description, tags), channel and per-video Analytics for the latest 28 complete days and the 28 before (views, watch time, avg view duration, avg % viewed, likes, comments, shares, subs gained, advertising views), traffic sources, retention curves (capped at 60 videos; `?retention=N`), revenue, and Studio-import impressions/CTR when present. Every dataset carries its source and dates; anything unavailable is `null` with a reason. No credentials are included. `?days=7` changes the window.
 
 ### Impressions and CTR
 

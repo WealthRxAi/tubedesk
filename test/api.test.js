@@ -204,6 +204,23 @@ test('owner analytics (all reports) once authorized', async () => {
   assert.equal(tx.segments.length, 3); assert.ok(/lookback/.test(tx.text));
 });
 
+test('audit export: catalogue, both windows, per-video with format split, traffic, retention, nulls with reasons', async () => {
+  const r = await ok(`/export/audit/${OWNER}?retention=3&filename=test-audit.json`);
+  const a = r.audit;
+  assert.ok(r.file.endsWith('test-audit.json') && fs.existsSync(r.file));
+  assert.equal(a.channel.id, OWNER); assert.ok(a.channel.google_connected === true && a.generated_at);
+  assert.ok(a.reporting_windows.current.days === 28 && a.reporting_windows.previous.endDate < a.reporting_windows.current.startDate);
+  assert.ok(a.catalogue.count >= 20 && a.catalogue.videos[0].url.includes(a.catalogue.videos[0].id) && 'description' in a.catalogue.videos[0] && ['long', 'short', 'live'].includes(a.catalogue.videos[0].format));
+  assert.ok(a.channel_performance.windows.current.totals.views > 0 && a.channel_performance.windows.previous.daily.length === 28);
+  const pv = a.per_video.windows.current; assert.ok(pv.videos.length === a.catalogue.count && pv.totals_by_format.long && pv.totals_by_format.short);
+  assert.ok(pv.videos.every(v => 'advertising_views' in v && v.impressions === null && v.thumbnail_ctr === null));
+  assert.ok(a.traffic.windows.current.by_source.length > 0 && 'advertising' in a.traffic.windows.current);
+  assert.equal(a.retention.covered, 3); assert.ok(Object.keys(a.retention.videos).length === 3);
+  assert.ok(a.impressions_ctr.rows ? /Studio CSV/.test(a.impressions_ctr.source) : /Studio CSV/.test(a.impressions_ctr.reason));
+  assert.ok(a.transcripts.value === null && /250 quota/.test(a.transcripts.reason));
+  assert.ok(!JSON.stringify(a).includes('refresh_token') && !JSON.stringify(a).includes('access_token'));
+});
+
 test('comments: read, filters, clusters, templates, reply, giveaway', async () => {
   const c = await ok(`/comments?channel=${OWNER}&owner=${OWNER}&filter=unanswered&pages=1`);
   assert.equal(c.total, 40); assert.ok(c.shown < c.total, 'owner-replied threads filtered out'); assert.ok(c.terms.length > 5 && c.questionClusters.length >= 1);

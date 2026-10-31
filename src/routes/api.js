@@ -17,6 +17,7 @@ import * as ai from '../services/ai.js';
 import * as scores from '../services/scores.js';
 import * as stats from '../services/stats.js';
 import * as estimate from '../services/estimate.js';
+import * as exp from '../services/export.js';
 import { runDailySnapshot } from '../jobs/scheduler.js';
 
 export const api = Router();
@@ -51,6 +52,12 @@ api.post('/settings/test-key', w(async (req, res) => {
 api.get('/quota', (req, res) => res.json({ today: quotaToday(), history: quotaHistory(14), ai: ai.usage(30) }));
 api.post('/cache/clear', (req, res) => res.json({ cleared: cacheClear(req.body?.prefix || '') }));
 // Exit cleanly; the macOS LaunchAgent (KeepAlive) or any process manager relaunches with the current code. Local-only like every route.
+// Read-only audit export: full catalogue + Analytics for the latest N complete days and the N before, saved under data/exports.
+api.get('/export/audit/:id', w(async (req, res) => {
+  const audit = await exp.channelAudit(req.params.id, { days: Number(req.query.days || 28), retentionLimit: Number(req.query.retention || 60) });
+  const file = req.query.save === '0' ? null : exp.saveAudit(audit, req.query.filename || `${(audit.channel.handle || audit.channel.id).replace(/^@/, '')}-tubedesk-audit.json`);
+  res.json({ file, audit });
+}));
 api.post('/system/restart', (req, res) => { res.json({ restarting: true }); setTimeout(() => process.exit(0), 300); });
 api.post('/snapshot/run', w(async (req, res) => res.json(await runDailySnapshot({ log: () => {} }))));
 
