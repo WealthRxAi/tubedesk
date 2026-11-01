@@ -39,7 +39,8 @@ Everything that is an estimate or heuristic is labeled as such in the UI. Nothin
 
 ## Requirements
 
-- Node.js 20+ (Claude Code already needs this)
+- Node.js 20+
+- ffmpeg (optional, for the media pipeline) and cloudflared (optional, for Instagram publishing) — both free via Homebrew (Claude Code already needs this)
 - A Google Cloud project (free) with **YouTube Data API v3** and **YouTube Analytics API** enabled
 - Claude Code on PATH for the AI features (`claude --version` works), or an Anthropic API key
 
@@ -84,6 +85,47 @@ Logs: `~/Library/Logs/tubedesk.log`. Remove with `launchctl unload ~/Library/Lau
 ### Impressions and CTR
 
 No Google API exposes impressions or click-through rate. YouTube Studio → Analytics → Advanced mode → Content → add the Impressions / CTR / Average view duration columns → Export → CSV, then drop the file on Analytics → *Impressions & CTR*.
+
+## Publishing (YouTube + Instagram) — built for AI agents
+
+TubeDesk can post for you, so any model that can call HTTP or run a command on your machine (Claude Code, Cursor, Codex, ChatGPT, Gemini, Grok, a cron script) can publish without browser automation:
+
+- **YouTube** uses the channel's existing Google authorization (no extra setup): resumable upload, scheduling (`publishAt`), custom thumbnail, playlist, AI-content disclosure. Cost: 1,600 API units per upload (≈6/day on the free quota).
+- **Instagram** Reels and images through the Instagram API: Settings → Instagram (professional account + a free Meta app token, ~5 minutes). Instagram downloads the file from a public URL, so TubeDesk serves it through your `public_base_url` or opens a free `cloudflared` quick tunnel only while the job runs (`brew install cloudflared`). Only that one unguessable media URL is reachable from outside; every other route refuses proxied requests.
+
+```bash
+curl -X POST 'http://localhost:4949/api/publish/youtube?wait=1' -H 'content-type: application/json' \
+  -d '{"file":"/abs/path/short.mp4","title":"My video","privacy":"public","thumbnail":"/abs/cover.jpg","containsSyntheticMedia":true}'
+curl -X POST 'http://localhost:4949/api/publish/instagram?wait=1' -H 'content-type: application/json' \
+  -d '{"file":"/abs/path/short.mp4","caption":"… #tag"}'
+```
+
+Jobs: `GET /api/publish/jobs`, `GET /api/publish/jobs/:id?wait=1`, readiness: `GET /api/publish/status`. Machine-readable contract: `GET /api/publish/schema`; plain-text guide for models: `GET /api/agent`.
+
+### MCP server (Claude Code, Claude Desktop, Cursor, any MCP client)
+
+```bash
+claude mcp add tubedesk -- node /path/to/tubedesk/mcp/server.js
+```
+
+No dependencies; it proxies the local TubeDesk server. Tools: `render_video`, `media_transcode`, `media_probe`, `speech_segments`, `caption_timing`, `extract_frame`, `render_job`, `publish_youtube`, `publish_instagram`, `publish_job`, `publish_status`, `list_channels`, `channel_videos`, `keyword_research`, `outliers`, `tubedesk_api`.
+
+## Media pipeline (ffmpeg): render from a JSON timeline
+
+Describe the video as data and get an MP4 back — the timeline is the project file. Tracks: `video` (with `in`, `crop`, `focus`, `zoom`, `freeze`), `image` (Ken Burns via `zoom`/`focus`), `box`, `text`, `captions` (from `groups`, an `.srt`, or a `script` auto-timed against the voice by pause detection), `audio` (`duck: true` compresses it under the voice), `tone` (thump/click/riser). Output is H.264/AAC with loudness normalized to `loudness` LUFS. Requires `ffmpeg` (`brew install ffmpeg`).
+
+```bash
+curl -X POST 'http://localhost:4949/api/render?wait=1' -H 'content-type: application/json' -d '{
+  "width":1080,"height":1920,"fps":30,"output":"/abs/out.mp4","tracks":[
+    {"type":"video","src":"/abs/talking-head.mp4","start":0,"focus":[0.5,0.35]},
+    {"type":"image","src":"/abs/dashboard.png","start":3,"end":7,"h":960,"zoom":{"from":1,"to":1.3}},
+    {"type":"text","text":"COMMENT DESK","start":19,"end":22,"y":520,"size":120,"color":"#FFD60A"},
+    {"type":"captions","script":["Sentence one.","Sentence two."],"audioFrom":0,"y":1180},
+    {"type":"audio","src":"/abs/bed.mp3","volume":0.35,"duck":true,"loop":true}
+  ]}'
+```
+
+Helpers: `POST /api/media/transcode {file, preset: short|youtube|square|contain}`, `/api/media/probe`, `/api/media/segments` (speech start/end), `/api/media/captions` (word timings + caption groups for a script), `/api/media/frame`. Track reference: `GET /api/render/schema`. Renders land in `data/renders/` unless `output` is set.
 
 ## Quota
 

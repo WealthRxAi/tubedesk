@@ -18,11 +18,13 @@ import * as scores from '../services/scores.js';
 import * as stats from '../services/stats.js';
 import * as estimate from '../services/estimate.js';
 import * as exp from '../services/export.js';
+import * as pub from '../services/publish.js';
+import * as ren from '../services/render.js';
 import { runDailySnapshot } from '../jobs/scheduler.js';
 
 export const api = Router();
 const w = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
-const SECRET_KEYS = ['yt_api_key', 'google_client_secret', 'anthropic_api_key'];
+const SECRET_KEYS = ['yt_api_key', 'google_client_secret', 'anthropic_api_key', 'ig_access_token'];
 
 // ---------- status & settings ----------
 api.get('/status', w(async (req, res) => {
@@ -30,7 +32,7 @@ api.get('/status', w(async (req, res) => {
   res.json({
     configured: { apiKey: !!s.yt_api_key, oauth: !!(s.google_client_id && s.google_client_secret) },
     ai: await ai.status(), quota: quotaToday(), channels: ch.listChannels().length,
-    lastSnapshot: s.last_snapshot ? JSON.parse(s.last_snapshot) : null, version: '1.1.0', dataDir: DATA_DIR,
+    lastSnapshot: s.last_snapshot ? JSON.parse(s.last_snapshot) : null, version: '1.2.0', dataDir: DATA_DIR,
   });
 }));
 api.get('/settings', (req, res) => {
@@ -58,6 +60,58 @@ api.get('/export/audit/:id', w(async (req, res) => {
   const file = req.query.save === '0' ? null : exp.saveAudit(audit, req.query.filename || `${(audit.channel.handle || audit.channel.id).replace(/^@/, '')}-tubedesk-audit.json`);
   res.json({ file, audit });
 }));
+// ---------- publishing (YouTube uploads, Instagram Reels/images) — built for AI agents: POST, then poll or ?wait=1 ----------
+api.get('/publish/status', (req, res) => res.json(pub.status()));
+api.get('/publish/jobs', (req, res) => res.json(pub.listJobs({ limit: Number(req.query.limit || 50), platform: req.query.platform || null })));
+api.get('/publish/jobs/:id', w(async (req, res) => {
+  const job = req.query.wait === '1' ? await pub.waitForJob(req.params.id, Number(req.query.timeout || 600) * 1000) : pub.getJob(req.params.id);
+  job ? res.json(job) : res.status(404).json({ error: 'job not found' });
+}));
+api.post('/publish/youtube', w(async (req, res) => {
+  let job;
+  try { job = pub.publishYouTube(req.body || {}); } catch (e) { return res.status(400).json({ error: e.message }); }
+  if (req.query.wait === '1' || req.body?.wait === true) job = await pub.waitForJob(job.id, Number(req.query.timeout || 600) * 1000);
+  res.status(job.status === 'failed' ? 502 : 200).json(job);
+}));
+api.post('/publish/instagram', w(async (req, res) => {
+  let job;
+  try { job = pub.publishInstagram(req.body || {}); } catch (e) { return res.status(400).json({ error: e.message }); }
+  if (req.query.wait === '1' || req.body?.wait === true) job = await pub.waitForJob(job.id, Number(req.query.timeout || 900) * 1000);
+  res.status(job.status === 'failed' ? 502 : 200).json(job);
+}));
+api.post('/publish/instagram/test', w(async (req, res) => res.json(await pub.instagramTest())));
+api.post('/publish/instagram/refresh-token', w(async (req, res) => res.json(await pub.refreshInstagramToken({ force: true }))));
+// Machine-readable contract so any model can publish without reading the source.
+api.get('/publish/schema', (req, res) => res.json(PUBLISH_SCHEMA));
+api.get('/agent', (req, res) => res.type('text/plain').send(AGENT_GUIDE));
+
+// ---------- media pipeline (ffmpeg): render a JSON timeline, transcode presets, probe, speech segments, caption timing ----------
+api.get('/render/status', (req, res) => res.json({ ...ren.toolStatus(), presets: ren.PRESETS, jobs: ren.listJobs(10) }));
+api.get('/render/schema', (req, res) => res.json(ren.TIMELINE_SCHEMA));
+api.get('/render/jobs', (req, res) => res.json(ren.listJobs(Number(req.query.limit || 50))));
+api.get('/render/jobs/:id', w(async (req, res) => { const j = req.query.wait === '1' ? await ren.waitForJob(req.params.id, Number(req.query.timeout || 1200) * 1000) : ren.getJob(req.params.id); j ? res.json(j) : res.status(404).json({ error: 'job not found' }); }));
+api.post('/render', w(async (req, res) => {
+  let job; try { job = ren.render(req.body || {}); } catch (e) { return res.status(400).json({ error: e.message }); }
+  if (req.query.wait === '1' || req.body?.wait === true) job = await ren.waitForJob(job.id, Number(req.query.timeout || 1200) * 1000);
+  res.status(job.status === 'failed' ? 502 : 200).json(job);
+}));
+api.post('/media/transcode', w(async (req, res) => {
+  let job; try { job = ren.transcode(req.body || {}); } catch (e) { return res.status(400).json({ error: e.message }); }
+  if (req.query.wait === '1' || req.body?.wait === true) job = await ren.waitForJob(job.id, Number(req.query.timeout || 1200) * 1000);
+  res.status(job.status === 'failed' ? 502 : 200).json(job);
+}));
+api.post('/media/probe', w(async (req, res) => res.json(await ren.probe(req.body?.file))));
+api.post('/media/frame', w(async (req, res) => res.json(await ren.frame(req.body || {}))));
+api.post('/media/segments', w(async (req, res) => res.json(await ren.speechSegments(req.body?.file, { noiseDb: req.body?.noiseDb, minPause: req.body?.minPause }))));
+api.post('/media/captions', w(async (req, res) => {
+  const { file, script, srt, maxWords } = req.body || {};
+  if (srt) return res.json({ groups: ren.parseSrtGroups(srt) });
+  if (!Array.isArray(script)) return res.status(400).json({ error: 'script[] (one line per spoken sentence/pause) and file are required, or srt text.' });
+  const segs = await ren.speechSegments(file, { noiseDb: req.body?.noiseDb, minPause: req.body?.minPause });
+  const timed = ren.timeScript(script, segs.segments);
+  res.json({ segments: segs.segments, lines: timed.lines, words: timed.words, groups: ren.groupWords(timed.words, { maxWords: maxWords || 4 }) });
+}));
+
 api.post('/system/restart', (req, res) => { res.json({ restarting: true }); setTimeout(() => process.exit(0), 300); });
 api.post('/snapshot/run', w(async (req, res) => res.json(await runDailySnapshot({ log: () => {} }))));
 
@@ -386,3 +440,81 @@ export function oauthCallback() {
 }
 
 export { YouTubeError };
+
+
+// ---------- agent-facing contract ----------
+const PUBLISH_SCHEMA = {
+  base: '/api/publish',
+  youtube: {
+    method: 'POST', path: '/api/publish/youtube', cost: '1,600 YouTube API units per upload (10,000/day free quota → 6 uploads/day)',
+    body: {
+      file: 'absolute path to an MP4/MOV on this machine (required)', title: 'string ≤100 chars (required)', description: 'string ≤5000',
+      tags: 'array of strings (≤500 chars joined)', privacy: "'private' | 'unlisted' | 'public' (default private)",
+      publishAt: 'ISO-8601 future time; requires privacy=private (YouTube flips it public then)', thumbnail: 'absolute path to JPG/PNG ≤2 MB (needs a verified YouTube account)',
+      playlistId: 'optional', categoryId: 'optional YouTube category id (e.g. 27 Education, 22 People & Blogs)', language: "BCP-47 like 'en'",
+      madeForKids: 'boolean (default false)', notifySubscribers: 'boolean (default true)', containsSyntheticMedia: 'boolean — set true for AI-generated/altered realistic content',
+      channelId: 'optional; defaults to the first authorized owned channel', wait: 'boolean — block until the upload finishes (also ?wait=1)',
+    },
+    returns: 'job {id, status: queued|running|done|failed, url, remote_id, log[], error}',
+  },
+  instagram: {
+    method: 'POST', path: '/api/publish/instagram', cost: 'free (Instagram Graph API, 100 posts per 24h limit)',
+    body: {
+      file: 'absolute path to an MP4/MOV (reel) or JPG/PNG (image) on this machine (required)', kind: "'reel' (default) | 'image'",
+      caption: 'string ≤2200 chars, ≤30 hashtags', shareToFeed: 'boolean (default true)', cover: 'optional JPG/PNG for the reel cover', thumbOffsetMs: 'optional cover frame offset',
+      collaborators: 'optional array of usernames', locationId: 'optional Facebook Page location id', wait: 'boolean — block until published (also ?wait=1)',
+    },
+    requirements: 'Instagram professional (Creator/Business) account; Settings → Instagram: account ID + long-lived access token. The file is served from a public URL only while the job runs (your public_base_url, or a free cloudflared quick tunnel).',
+    returns: 'job {id, status, url (permalink), remote_id, log[], error}',
+  },
+  jobs: { list: 'GET /api/publish/jobs?platform=youtube|instagram', one: 'GET /api/publish/jobs/:id?wait=1&timeout=600', status: 'GET /api/publish/status' },
+  render: { method: 'POST', path: '/api/render?wait=1', body: 'timeline JSON — GET /api/render/schema', returns: 'job {id, status, output (absolute MP4 path), log[]}', tools: 'POST /api/media/transcode {file, preset: short|youtube|square|contain} · POST /api/media/probe {file} · POST /api/media/segments {file} · POST /api/media/captions {file, script[]} · POST /api/media/frame {file, at}' },
+  mcp: 'Model Context Protocol server: `node mcp/server.js` (stdio). Register with `claude mcp add tubedesk -- node /path/to/tubedesk/mcp/server.js`.',
+};
+
+const AGENT_GUIDE = `TubeDesk — agent guide (plain text)
+Base URL: http://localhost:${process.env.PORT || 4949}  (local only; no auth needed from this machine)
+
+PUBLISH A VIDEO TO YOUTUBE
+  POST /api/publish/youtube?wait=1
+  {"file":"/abs/path/video.mp4","title":"…","description":"…","tags":["a","b"],"privacy":"public","thumbnail":"/abs/path/cover.jpg","containsSyntheticMedia":true}
+  → {"id":"…","status":"done","url":"https://youtu.be/VIDEO_ID", "log":[…]}   (status "failed" + "error" on problems)
+  Schedule instead of publishing now: "privacy":"private","publishAt":"2026-11-02T14:00:00Z"
+  Cost: 1,600 API units per upload out of the free 10,000/day. GET /api/publish/status shows uploadsLeftToday.
+
+PUBLISH A REEL / IMAGE TO INSTAGRAM
+  POST /api/publish/instagram?wait=1
+  {"file":"/abs/path/reel.mp4","kind":"reel","caption":"… #tag","shareToFeed":true}
+  → {"id":"…","status":"done","url":"https://www.instagram.com/reel/…"}
+  Needs Settings → Instagram configured (account ID + token). Reels: MP4 H.264/AAC, 9:16, 3s–15min, ≤1 GB.
+
+RENDER A VIDEO FROM A JSON TIMELINE (ffmpeg)
+  POST /api/render?wait=1
+  {"width":1080,"height":1920,"fps":30,"tracks":[
+    {"type":"video","src":"/abs/talking-head.mp4","start":0,"w":1080,"h":1920,"focus":[0.5,0.35]},
+    {"type":"image","src":"/abs/dashboard.png","start":3,"end":7,"y":0,"h":960,"zoom":{"from":1,"to":1.3},"focus":[0.6,0.3]},
+    {"type":"text","text":"COMMENT DESK","start":19,"end":22,"y":520,"size":120,"color":"#FFD60A","fadeIn":0.1},
+    {"type":"captions","script":["Sentence one.","Sentence two."],"audioFrom":0,"y":1180,"size":58},
+    {"type":"tone","start":3,"kind":"thump"},
+    {"type":"audio","src":"/abs/bed.mp3","volume":0.35,"duck":true,"loop":true}
+  ],"loudness":-14,"output":"/abs/out.mp4"}
+  → {"id":"…","status":"done","output":"/abs/out.mp4","log":[…]}
+  Captions with "script" are auto-timed from the voice (pause detection): one line per spoken sentence/pause.
+  Full track reference: GET /api/render/schema. Presets: POST /api/media/transcode {"file":"…","preset":"short"|"youtube"|"square"}.
+  Inspect: POST /api/media/probe {"file"} · /api/media/segments {"file"} · /api/media/captions {"file","script":[…]} · /api/media/frame {"file","at":12.5}
+  Then publish the output with /api/publish/youtube or /api/publish/instagram.
+
+CHECK LATER
+  GET /api/publish/jobs/:id        GET /api/render/jobs/:id        GET /api/publish/jobs        GET /api/publish/status
+
+OTHER USEFUL READS
+  GET /api/channels                              owned + competitor channels (owned ones have "authorized")
+  GET /api/channels/:id/videos?limit=50          local catalogue with views/day and outlier ×
+  GET /api/keywords/explore?q=…                  autocomplete tree + competition
+  GET /api/keywords/demand?q=…                   demand index 0–100 (not search volume)
+  GET /api/outliers/search?q=…&days=90           videos far above their channel median
+  GET /api/export/audit/:channelId               full read-only audit JSON
+  GET /api/publish/schema                        this contract as JSON
+
+MCP (Claude Code, Cursor, any MCP client): node mcp/server.js  — tools: render_video, media_transcode, media_probe, speech_segments, caption_timing, extract_frame, render_job, publish_youtube, publish_instagram, publish_job, publish_status, list_channels, channel_videos, keyword_research, outliers, tubedesk_api (any GET/POST).
+`;

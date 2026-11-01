@@ -29,6 +29,23 @@ export function startMock(port = 0) {
     const q = Object.fromEntries(u.searchParams);
     calls.push({ path: u.pathname, q, method: req.method, auth: req.headers.authorization || null });
     const json = (o, code = 200) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(o)); };
+    // --- publishing mocks: YouTube resumable upload + thumbnails, Instagram Graph API ---
+    if (u.pathname.endsWith('/upload/videos') || u.pathname.endsWith('/upload/videos/session')) {
+      if (u.pathname.endsWith('/session')) { let n = 0; req.on('data', d => n += d.length); return req.on('end', () => { calls.at(-1).bytes = n; json({ id: 'NEWVID00001', status: { uploadStatus: 'uploaded', privacyStatus: 'private' } }); }); }
+      let b = ''; req.on('data', d => b += d);
+      return req.on('end', () => { calls.at(-1).body = JSON.parse(b || '{}'); calls.at(-1).xlen = req.headers['x-upload-content-length']; res.writeHead(200, { location: `http://127.0.0.1:${server.address().port}/upload/videos/session`, 'content-type': 'application/json' }); res.end('{}'); });
+    }
+    if (u.pathname.endsWith('/upload/thumbnails/set')) { req.on('data', () => {}); return req.on('end', () => json({ items: [{ default: { url: 'x' } }] })); }
+    if (u.pathname.includes('/ig/')) {
+      const p = u.pathname.split('/ig/')[1];
+      if (p === 'me') return json({ id: '17841400000000001', username: 'salstack.ai', account_type: 'BUSINESS', media_count: 12 });
+      if (p === 'refresh_access_token') return json({ access_token: 'IG_REFRESHED', token_type: 'bearer', expires_in: 5184000 });
+      if (p.endsWith('/media')) { calls.at(-1).igMedia = q; return json({ id: 'CONTAINER1' }); }
+      if (p === 'CONTAINER1') { calls.at(-1).poll = (calls.at(-1).poll || 0); const n = calls.filter(c => c.path.endsWith('/ig/CONTAINER1')).length; return json({ status_code: n >= 2 ? 'FINISHED' : 'IN_PROGRESS', status: 'ok' }); }
+      if (p.endsWith('/media_publish')) return json({ id: 'IGMEDIA1' });
+      if (p === 'IGMEDIA1') return json({ permalink: 'https://www.instagram.com/reel/ABC123/' });
+      return json({ error: { message: 'unknown ig path ' + p } }, 400);
+    }
     if (u.pathname.endsWith('/complete/search')) { res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify([q.q, [q.q + ' explained', q.q + ' for beginners', 'how does ' + q.q + ' work', q.q + ' 2026', q.q + ' vs trust'].map(s => [s])])); }
     if (u.pathname.endsWith('/reports')) {
       const dims = (q.dimensions || '').split(',').filter(Boolean);

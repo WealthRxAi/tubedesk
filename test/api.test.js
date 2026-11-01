@@ -23,7 +23,7 @@ before(async () => {
   mock = await startMock(0);
   const port = 4900 + Math.floor(Math.random() * 90);
   base = `http://127.0.0.1:${port}`;
-  child = spawn(process.execPath, ['src/server.js'], { cwd: path.join(path.dirname(new URL(import.meta.url).pathname), '..'), env: { ...process.env, PORT: String(port), TUBEDESK_DATA_DIR: dataDir, TUBEDESK_NO_SCHEDULER: '1', YT_API_BASE: `http://127.0.0.1:${mock.port}/youtube/v3`, YT_ANALYTICS_BASE: `http://127.0.0.1:${mock.port}/v2/reports`, YT_SUGGEST_URL: `http://127.0.0.1:${mock.port}/complete/search` }, stdio: ['ignore', 'pipe', 'pipe'] });
+  child = spawn(process.execPath, ['src/server.js'], { cwd: path.join(path.dirname(new URL(import.meta.url).pathname), '..'), env: { ...process.env, PORT: String(port), TUBEDESK_DATA_DIR: dataDir, TUBEDESK_NO_SCHEDULER: '1', YT_API_BASE: `http://127.0.0.1:${mock.port}/youtube/v3`, YT_ANALYTICS_BASE: `http://127.0.0.1:${mock.port}/v2/reports`, YT_SUGGEST_URL: `http://127.0.0.1:${mock.port}/complete/search`, YT_UPLOAD_BASE: `http://127.0.0.1:${mock.port}/upload`, IG_GRAPH_BASE: `http://127.0.0.1:${mock.port}/ig` }, stdio: ['ignore', 'pipe', 'pipe'] });
   child.stderr.on('data', d => process.stderr.write('[server] ' + d));
   for (let i = 0; i < 50; i++) { try { await fetch(base + '/api/status'); break; } catch { await new Promise(r => setTimeout(r, 100)); } }
 });
@@ -306,4 +306,84 @@ test('scores, demand index, and extension endpoints', async () => {
   assert.equal(cors.status, 204); assert.equal(cors.headers.get('access-control-allow-origin'), 'chrome-extension://abcdef');
   const noCors = await fetch(base + '/api/status', { headers: { Origin: 'https://evil.example' } });
   assert.equal(noCors.headers.get('access-control-allow-origin'), null);
+});
+
+
+test('publishing: contract, validation, YouTube upload job, Instagram reel job', async () => {
+  const schema = await ok('/publish/schema');
+  assert.equal(schema.youtube.path, '/api/publish/youtube');
+  const guide = await fetch(base + '/api/agent').then(r => r.text());
+  assert.ok(guide.includes('POST /api/publish/youtube'));
+  const st = await ok('/publish/status');
+  assert.equal(st.youtube.uploadCostUnits, 1600);
+  // validation
+  let r = await api('/publish/youtube', { method: 'POST', body: { title: 'x' } });
+  assert.equal(r.status, 400); assert.ok(/file is required/.test(r.json.error));
+  const vid = path.join(dataDir, 'clip.mp4'); fs.writeFileSync(vid, Buffer.alloc(300000, 1));
+  const thumb = path.join(dataDir, 'cover.jpg'); fs.writeFileSync(thumb, Buffer.alloc(5000, 2));
+  r = await api('/publish/youtube', { method: 'POST', body: { file: vid, title: '' } });
+  assert.equal(r.status, 400); assert.ok(/title is required/.test(r.json.error));
+  r = await api('/publish/youtube', { method: 'POST', body: { file: vid, title: 'T', privacy: 'public', publishAt: '2099-01-01T00:00:00Z' } });
+  assert.equal(r.status, 400); assert.ok(/scheduled videos must use privacy 'private'/.test(r.json.error));
+  // upload (owner tokens were injected earlier in this file)
+  const job = await ok('/publish/youtube?wait=1', { method: 'POST', body: { file: vid, title: 'Test upload', description: 'desc', tags: ['a', 'b'], privacy: 'unlisted', thumbnail: thumb, containsSyntheticMedia: true } });
+  assert.equal(job.status, 'done', JSON.stringify(job));
+  assert.equal(job.url, 'https://youtu.be/NEWVID00001');
+  const init = calls.find(c => c.path.endsWith('/upload/videos'));
+  assert.equal(init.body.snippet.title, 'Test upload'); assert.equal(init.body.status.privacyStatus, 'unlisted'); assert.equal(init.body.status.containsSyntheticMedia, true); assert.equal(init.xlen, '300000');
+  assert.equal(calls.find(c => c.path.endsWith('/upload/videos/session')).bytes, 300000, 'whole file streamed');
+  assert.ok(calls.some(c => c.path.endsWith('/upload/thumbnails/set')));
+  assert.ok(job.log.some(l => /thumbnail set/.test(l)));
+  const list = await ok('/publish/jobs?platform=youtube'); assert.equal(list[0].id, job.id);
+  const quota = await ok('/quota'); assert.ok(quota.today.units >= 1650, 'upload units logged: ' + quota.today.units);
+  // instagram: not configured → 400; configure (public_base_url so no tunnel) → publish
+  r = await api('/publish/instagram', { method: 'POST', body: { file: vid, caption: 'hi' } });
+  assert.equal(r.status, 400); assert.ok(/not configured/.test(r.json.error));
+  await ok('/settings', { method: 'PUT', body: { ig_access_token: 'IGTOKEN', public_base_url: 'https://example.test' } });
+  const me = await ok('/publish/instagram/test', { method: 'POST' }); assert.equal(me.username, 'salstack.ai');
+  assert.equal((await ok('/settings')).ig_access_token, '••••OKEN', 'ig token masked');
+  const ig = await ok('/publish/instagram?wait=1', { method: 'POST', body: { file: vid, caption: 'Reel caption #one', shareToFeed: false } });
+  assert.equal(ig.status, 'done', JSON.stringify(ig));
+  assert.equal(ig.url, 'https://www.instagram.com/reel/ABC123/');
+  const media = calls.find(c => c.igMedia); assert.equal(media.igMedia.media_type, 'REELS'); assert.equal(media.igMedia.share_to_feed, 'false');
+  assert.ok(/^https:\/\/example\.test\/public\/media\/[a-f0-9]{36}\.mp4$/.test(media.igMedia.video_url), media.igMedia.video_url);
+  // the public media lease is served only while the job runs (released after) and only by token
+  const leased = media.igMedia.video_url.replace('https://example.test', base);
+  assert.equal((await fetch(leased)).status, 404, 'lease released after publish');
+  const refreshed = await ok('/publish/instagram/refresh-token', { method: 'POST' }); assert.equal(refreshed.refreshed, true);
+  await ok('/settings', { method: 'PUT', body: { public_base_url: '' } });
+});
+
+
+test('media pipeline: probe, segments, caption timing, timeline render, transcode, frame', { skip: !fs.existsSync('/usr/local/bin/ffmpeg') && !fs.existsSync('/usr/bin/ffmpeg') && !fs.existsSync('/opt/homebrew/bin/ffmpeg') }, async () => {
+  const st = await ok('/render/status'); assert.equal(st.ready, true, JSON.stringify(st));
+  const { execFileSync } = await import('node:child_process');
+  const voice = path.join(dataDir, 'voice.mp4'), still = path.join(dataDir, 'still.png'), bed = path.join(dataDir, 'bed.wav');
+  // 4s "voice": tone 0.4–1.4s, silence, tone 1.9–3.4s (two sentences), on a 640x360 colour video
+  execFileSync(st.ffmpeg, ['-y', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=blue:s=640x360:r=30:d=4', '-f', 'lavfi', '-i', "aevalsrc='0.5*sin(2*PI*220*t)*(between(t,0.4,1.4)+between(t,1.9,3.4))':s=48000:d=4", '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', voice]);
+  execFileSync(st.ffmpeg, ['-y', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=red:s=800x600:d=1', '-frames:v', '1', still]);
+  execFileSync(st.ffmpeg, ['-y', '-loglevel', 'error', '-f', 'lavfi', '-i', "aevalsrc='0.3*sin(2*PI*110*t)':s=48000:d=5", bed]);
+  const pr = await ok('/media/probe', { method: 'POST', body: { file: voice } }); assert.equal(pr.video.width, 640); assert.ok(pr.duration > 3.5);
+  const seg = await ok('/media/segments', { method: 'POST', body: { file: voice } }); assert.equal(seg.segments.length, 2, JSON.stringify(seg));
+  const cap = await ok('/media/captions', { method: 'POST', body: { file: voice, script: ['Hello there friend.', 'Second sentence here now.'] } });
+  assert.equal(cap.lines.length, 2); assert.ok(cap.groups.length >= 2); assert.ok(cap.words[0].start >= 0.35 && cap.words[0].start <= 0.5, JSON.stringify(cap.words[0]));
+  const out = path.join(dataDir, 'render.mp4');
+  const job = await ok('/render?wait=1', { method: 'POST', body: { output: out, width: 1080, height: 1920, fps: 30, tracks: [
+    { type: 'video', src: voice, start: 0, duration: 4, w: 1080, h: 1920, focus: [0.5, 0.5] },
+    { type: 'image', src: still, start: 1, end: 3, y: 0, h: 960, zoom: { from: 1, to: 1.3 } },
+    { type: 'box', start: 0, end: 1, y: 840, h: 250, opacity: 0.7 },
+    { type: 'text', text: 'I BUILT THIS', start: 0, end: 1, y: 880, size: 100, fadeIn: 0.1 },
+    { type: 'captions', script: ['Hello there friend.', 'Second sentence here now.'], audioFrom: 0, y: 1180 },
+    { type: 'tone', start: 1, kind: 'thump' },
+    { type: 'audio', src: bed, start: 0, volume: 0.3, duck: true, fadeOut: 1 },
+  ], loudness: -14 } });
+  assert.equal(job.status, 'done', JSON.stringify(job.log));
+  const o = await ok('/media/probe', { method: 'POST', body: { file: out } });
+  assert.equal(o.video.width, 1080); assert.equal(o.video.height, 1920); assert.ok(Math.abs(o.duration - 4) < 0.3, 'duration ' + o.duration); assert.equal(o.audio.codec, 'aac');
+  assert.ok(job.log.some(l => /caption groups/.test(l)) && job.log.some(l => /loudness/.test(l)));
+  const tr = await ok('/media/transcode?wait=1', { method: 'POST', body: { file: voice, preset: 'square', output: path.join(dataDir, 'sq.mp4') } });
+  assert.equal(tr.status, 'done', JSON.stringify(tr.log)); assert.equal((await ok('/media/probe', { method: 'POST', body: { file: tr.output } })).video.width, 1080);
+  const fr = await ok('/media/frame', { method: 'POST', body: { file: out, at: 0.5, width: 270 } }); assert.ok(fs.existsSync(fr.file));
+  assert.equal((await api('/render', { method: 'POST', body: { tracks: [] } })).status, 400);
+  assert.equal((await ok('/render/jobs')).length, 2);
 });
