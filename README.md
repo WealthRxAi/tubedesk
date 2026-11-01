@@ -39,8 +39,8 @@ Everything that is an estimate or heuristic is labeled as such in the UI. Nothin
 
 ## Requirements
 
-- Node.js 20+
-- ffmpeg (optional, for the media pipeline) and cloudflared (optional, for Instagram publishing) — both free via Homebrew (Claude Code already needs this)
+- Node.js 20+ (Claude Code already needs this)
+- ffmpeg (optional, for the media pipeline) and cloudflared (optional, for Instagram publishing) — both free via Homebrew
 - A Google Cloud project (free) with **YouTube Data API v3** and **YouTube Analytics API** enabled
 - Claude Code on PATH for the AI features (`claude --version` works), or an Anthropic API key
 
