@@ -1,7 +1,7 @@
 /* Virality radar: pre-publish package scoring, calibration against the channel's own history, live breakout watch. */
 (() => {
   const { view, api, h, raw, safe, esc, fmt, fmtFull, ago, date, videoCell, stat, empty, needOwned, scoreRing, err, toast, busy, state, openVideo, ls, lineChart, openDrawer, scoreClass } = TD;
-  const TABS = [['score', 'Score an idea'], ['watch', 'Live watch'], ['calibration', 'Calibration'], ['history', 'History'], ['method', 'Method']];
+  const TABS = [['ideas', 'Daily ideas'], ['score', 'Score an idea'], ['watch', 'Live watch'], ['autopilot', 'Autopilot'], ['calibration', 'Calibration'], ['history', 'History'], ['method', 'Method']];
   let AXES = null;
   const axesInfo = async () => AXES || (AXES = await api('/radar/axes'));
 
@@ -10,7 +10,7 @@
     main.innerHTML = h`<div class="page-head"><div><h1>Virality radar</h1><div class="sub">Score a package before you publish, calibrated to what actually moved views on this channel — then watch every new upload against its usual launch curve.</div></div></div>
       <div class="tabs">${TABS.map(([k, l]) => h`<a href="#/radar/${k}" class="${tab === k ? 'active' : ''}">${l}</a>`).join('')}</div><div id="body"></div>`;
     const body = main.querySelector('#body');
-    await ({ score, watch, calibration, history, method }[tab] || score)(body, r);
+    await ({ ideas, score, watch, autopilot, calibration, history, method }[tab] || score)(body, r);
   });
 
   // ---------- shared visuals ----------
@@ -173,10 +173,11 @@
     const ch = state.current; if (!ch) { body.innerHTML = needOwned(); return; }
     const d = await api(`/radar/watch/${ch.id}`);
     const own = d.videos.filter(v => v.kind === 'owned'), comp = d.videos.filter(v => v.kind !== 'owned');
-    const table = list => list.length ? h`<table><thead><tr><th>Video</th><th class="num">Age</th><th class="num">Views</th><th class="num">Usual at this age</th><th class="num">Pace</th><th>Status</th><th class="num">Peak</th><th class="num">Retention</th><th>Curve</th></tr></thead><tbody>
-      ${list.map(v => h`<tr class="clickable" data-curve="${v.video_id}"><td><div class="vt"><img class="thumb sm ${v.is_short ? 'v' : ''}" src="${v.thumbnail || ''}"><div><div class="t">${v.title}</div><div class="m">${v.kind === 'owned' ? '' : v.channel_title + ' · '}${v.active ? 'watching' : 'final reading'}</div></div></div></td>
+    const table = list => list.length ? h`<table><thead><tr><th>Video</th><th class="num">Age</th><th class="num">Views</th><th class="num">Usual at this age</th><th class="num">Pace</th><th>Status</th><th class="num">Peak</th><th class="num">CTR</th><th class="num">Retention</th><th>Curve</th></tr></thead><tbody>
+      ${list.map(v => h`<tr class="clickable" data-curve="${v.video_id}"><td><div class="vt"><img class="thumb sm ${v.is_short ? 'v' : ''}" src="${v.thumbnail || ''}"><div><div class="t">${v.title}</div><div class="m">${v.kind === 'owned' ? '' : v.channel_title + ' · '}${v.active ? 'watching' : 'final reading'}${v.kind === 'owned' && v.autopilot_note ? h` · autopilot: ${v.autopilot_note.slice(0, 80)}` : ''}</div></div></div></td>
         <td class="num">${v.age_hours === null ? '—' : v.age_hours < 48 ? Math.round(v.age_hours) + 'h' : (v.age_hours / 24).toFixed(1) + 'd'}</td><td class="num">${fmtFull(v.views)}</td><td class="num" title="${v.baseline_source || ''}">${v.expected === null ? '—' : fmtFull(Math.round(v.expected))}${v.confidence === 'low' ? h` <span class="badge warn" title="${v.baseline_source || ''}">est.</span>` : ''}</td>
         <td class="num"><span class="badge x ${v.idx >= 2 ? 'ok' : v.idx >= 1.3 ? 'info' : v.idx !== null && v.idx < 0.7 ? 'warn' : ''}">${xFmt(v.idx)}</span></td><td><span class="badge ${statusClass(v.status)}">${v.status || '—'}</span></td><td class="num">${xFmt(v.peak_idx)}</td>
+        <td class="num">${v.ctr !== null && v.ctr !== undefined ? h`${v.ctr.toFixed(1)}%${v.ctr_vs_channel ? h` <span class="mini">(${xFmt(v.ctr_vs_channel)} usual)</span>` : ''}` : h`<span class="mini" title="YouTube's reach reports arrive ~2 days after each day">—</span>`}</td>
         <td class="num">${v.retention_pct ? h`${v.retention_pct.toFixed(0)}%${v.retention_vs_channel ? h` <span class="mini">(${xFmt(v.retention_vs_channel)} avg)</span>` : ''}` : '—'}</td><td>${spark(v.spark)}</td></tr>`).join('')}</tbody></table>` : null;
     const lr = d.lastRun;
     body.innerHTML = h`<div class="row between" style="margin-bottom:12px"><div class="mini">${lr ? h`Last check ${ago(lr.at)} · ${lr.watched} videos · ${lr.channels} channels${lr.errors?.length ? h` · <span class="down">${lr.errors.length} error(s)</span>` : ''}` : 'Not run yet.'} Runs on its own every hour (≈2 quota units per channel).</div><button id="run" class="primary sm">Check now</button></div>
@@ -198,8 +199,97 @@
       document.getElementById('drawer-inner').innerHTML = h`<div class="drawer-head"><div><h2>${v.title}</h2><div class="mini">${v.kind === 'owned' ? 'Your upload' : 'Competitor upload'} · published ${date(v.published_at)} · ${fmtFull(v.views)} views</div></div><button onclick="TD.closeDrawer()">Close</button></div>
         <div class="grid g4">${raw(stat('Pace now', xFmt(v.idx)))}${raw(stat('Peak pace', xFmt(v.peak_idx)))}${raw(stat('Status', esc(v.status || '—')))}${raw(stat('Likes / comments', `${fmt(v.likes)} / ${fmt(v.comments)}`))}</div>
         <div class="card" style="margin-top:14px"><h2>Launch curve vs usual <span class="mini"><span class="lg b"></span> this video <span class="lg a"></span> usual at same age</span></h2>${raw(lineChart([{ values: c.expected.map(e => at(e.h)) }, { values: c.expected.map(e => e.v), cls: 'b' }], { labels: labels.map(l => '00000' + l), fill: false }))}<div class="src">Baseline: ${v.baseline_source || 'n/a'} (${v.confidence || 'n/a'} confidence).</div></div>
-        <div class="row" style="margin-top:12px"><a class="btn" href="https://www.youtube.com/watch?v=${v.video_id}" target="_blank" rel="noopener">Open on YouTube</a>${v.kind === 'owned' ? h`<a class="btn" href="#/packaging/thumbnail" onclick="TD.closeDrawer()">Swap thumbnail</a><a class="btn" href="#/packaging/staged" onclick="TD.closeDrawer()">Stage a new title</a>` : h`<a class="btn" href="#/radar/score" onclick="TD.closeDrawer()">Score a response idea</a>`}</div>`;
+        <div class="row" style="margin-top:12px"><a class="btn" href="https://www.youtube.com/watch?v=${v.video_id}" target="_blank" rel="noopener">Open on YouTube</a>${v.kind === 'owned' ? h`<button class="primary" id="ap-run">Run autopilot now</button><a class="btn" href="#/radar/autopilot" onclick="TD.closeDrawer()">Thumbnail bank & settings</a>` : h`<a class="btn" href="#/radar/score" onclick="TD.closeDrawer()">Score a response idea</a>`}</div>
+        ${v.kind === 'owned' && v.autopilot_note ? h`<div class="note" style="margin-top:10px"><b>Autopilot:</b> ${v.autopilot_note}</div>` : ''}<div id="ap-out" style="margin-top:10px"></div>`;
+      const run = document.getElementById('ap-run');
+      if (run) run.onclick = async () => { busy(run, true); const o = document.getElementById('ap-out'); o.innerHTML = h`<div class="loading"><span class="spinner"></span> Diagnosing, writing alternatives and scoring them — about a minute…</div>`; try { const a = await api(`/autopilot/run/${id}`, { method: 'POST', body: { force: true } }); o.innerHTML = actionCard(a); } catch (x) { o.innerHTML = h`<div class="note bad">${x.message}</div>`; } busy(run, false); };
     } catch (x) { document.getElementById('drawer-inner').innerHTML = h`<div class="note bad">${x.message}</div>`; }
+  }
+
+  // ---------- Daily ideas ----------
+  async function ideas(body) {
+    const ch = state.current; if (!ch) { body.innerHTML = needOwned(); return; }
+    const list = await api(`/ideas/${ch.id}?days=14`);
+    const byDay = {};
+    for (const i of list) (byDay[i.day] ||= []).push(i);
+    body.innerHTML = h`<div class="row between" style="margin-bottom:12px"><div class="mini">Built every morning from competitor breakouts, your own winners, the search terms that bring you viewers and new autocomplete suggestions. Every title is scored on the radar; the top 3 go to your phone.</div><button id="run" class="primary sm">Build today's list now</button></div><div id="ideas-out">
+      ${list.length ? Object.entries(byDay).map(([day, items]) => h`<h2 style="margin:14px 0 8px">${day === new Date().toLocaleDateString('en-CA') ? 'Today' : day}</h2><div class="grid g2">${items.map(ideaCard).join('')}</div>`).join('') : empty('No ideas yet.', h`<br>The first list is built tomorrow morning — or press “Build today's list now”.`)}</div>`;
+    body.querySelector('#run').onclick = async e => { busy(e.target, true); body.querySelector('#ideas-out').insertAdjacentHTML('afterbegin', h`<div class="loading" id="ld"><span class="spinner"></span> Gathering signals, writing ideas and scoring every title — 1–3 minutes…</div>`); try { const r = await api(`/ideas/${ch.id}/run`, { method: 'POST', body: {} }); toast(`${r.ideas.length} ideas from ${r.signals} signals`, 'ok'); await ideas(body); } catch (x) { err(x); body.querySelector('#ld')?.remove(); busy(e.target, false); } };
+    body.querySelectorAll('[data-st]').forEach(b => b.onclick = async () => { await api(`/ideas/item/${b.dataset.id}/status`, { method: 'POST', body: { status: b.dataset.st } }); b.dataset.st === 'dismissed' ? b.closest('.card').remove() : toast(b.dataset.st === 'saved' ? 'Saved' : 'Marked as used', 'ok'); });
+    body.querySelectorAll('[data-score]').forEach(b => b.onclick = () => { const i = list.find(x => String(x.id) === b.dataset.score); ls('radar-form', { titles: i.titles.map(t => t.title).join('\n'), hook: i.hook, kw: i.keyword, fmt: i.format, ai: true }); location.hash = '#/radar/score'; });
+  }
+  function ideaCard(i) {
+    return h`<div class="card"><div class="row between" style="align-items:flex-start"><div style="min-width:0;flex:1"><span class="rank">#${i.rank}</span> <span class="badge">${i.format}</span> ${i.status !== 'new' ? h`<span class="badge info">${i.status}</span>` : ''}<h2 style="margin:4px 0">${i.best_title}</h2><div class="mini">${i.angle}</div></div>${i.score !== null ? scoreRing(i.score) : ''}</div>
+      <div class="kv" style="margin-top:8px"><b>Predicted</b><span>${xFmt(i.predicted_x)} usual · P(≥2×) ${pctFmt(i.p_breakout)} · <span class="badge ${bandClass(i.band)}">${i.band || '—'}</span></span><b>Thumbnail text</b><span>${i.thumb_text || '—'}</span><b>Hook</b><span>${i.hook || '—'}</span></div>
+      <table class="axes-t" style="margin-top:8px"><tbody>${i.titles.map(t => h`<tr><td>${t.title}</td><td class="num"><span class="axv ${scoreClass(t.score ?? 0)}">${t.score ?? '—'}</span></td></tr>`).join('')}</tbody></table>
+      ${i.sources.length ? h`<div class="src">Evidence: ${i.sources.map(s => h`<span title="${s.type}">[${s.id}] ${s.text}</span>`).join(' · ')}</div>` : ''}
+      <div class="row" style="margin-top:10px"><button class="sm" data-score="${i.id}">Refine in Score</button><button class="sm" data-st="saved" data-id="${i.id}">Save</button><button class="sm" data-st="used" data-id="${i.id}">Made it</button><button class="sm ghost" data-st="dismissed" data-id="${i.id}">Dismiss</button></div></div>`;
+  }
+
+  // ---------- Autopilot ----------
+  function actionCard(a) {
+    const st = { applied: 'ok', kept: 'ok', suggested: 'info', skipped: '', failed: 'bad', reverted: 'warn' }[a.status] || '';
+    const c = a.candidates || {};
+    return h`<div class="card ap-card" data-action="${a.id}"><div class="row between" style="align-items:flex-start"><div style="min-width:0;flex:1"><span class="badge ${st}">${a.status}</span> <span class="mini">${ago(a.created_at)} · ${a.trigger || ''}</span><h2 style="margin:4px 0">${a.video_title || a.before_title}</h2></div>
+      <div class="row" style="flex:none">${a.status === 'suggested' ? h`<button class="primary sm" data-approve="${a.id}">Approve & apply</button>` : ''}${['applied', 'kept'].includes(a.status) ? h`<button class="sm" data-revert="${a.id}">Undo</button>` : ''}<a class="btn sm" href="https://youtu.be/${a.video_id}" target="_blank" rel="noopener">YouTube</a></div></div>
+      ${a.diagnosis ? h`<div class="note" style="margin:8px 0"><b>Diagnosis (${a.diagnosis.kind}):</b> ${a.diagnosis.text}</div>` : ''}
+      <div class="mini">${a.message || ''}</div>
+      ${a.after_title || a.after_thumb ? h`<div class="ap-ba"><div><div class="mini">Before · radar ${a.before_score ?? '—'}</div>${a.before_thumb ? h`<img class="radar-thumb" src="${a.before_thumb}">` : ''}<div class="t">${a.before_title}</div></div><div class="ap-arrow">→</div><div><div class="mini">After · radar ${a.after_score ?? '—'}</div>${a.after_thumb ? h`<img class="radar-thumb" src="${a.after_thumb}">` : a.before_thumb ? h`<img class="radar-thumb" src="${a.before_thumb}" style="opacity:.5">` : ''}<div class="t">${a.after_title || a.before_title}</div></div></div>` : ''}
+      ${a.outcome ? h`<div class="note ${a.status === 'reverted' ? 'warn' : 'ok'}" style="margin-top:8px"><b>Graded on real CTR:</b> ${a.outcome}</div>` : ''}
+      ${c.titles?.length ? h`<details style="margin-top:8px"><summary class="mini">Candidates scored (${c.titles.length} titles, ${c.thumbnails?.length || 0} thumbnails; current ${c.current?.score ?? '—'})</summary><table class="axes-t"><tbody>${c.titles.map(t => h`<tr><td>${t.title}</td><td class="num"><span class="axv ${scoreClass(t.score ?? 0)}">${t.score ?? '—'}</span></td></tr>`).join('')}</tbody></table>
+        ${c.thumbnails?.length ? h`<div class="row" style="flex-wrap:wrap;margin-top:6px">${c.thumbnails.map(t => h`<div style="width:150px"><img src="${t.url}" class="radar-thumb"><div class="mini">${t.label} · ${t.score ?? '—'}</div></div>`).join('')}</div>` : ''}${c.thumbErrors?.length ? h`<div class="mini down">${c.thumbErrors.join(' · ')}</div>` : ''}</details>` : ''}
+    </div>`;
+  }
+  async function autopilot(body) {
+    const ch = state.current; if (!ch) { body.innerHTML = needOwned(); return; }
+    const [{ settings: s, actions }, nc, settingsAll, board] = await Promise.all([api(`/autopilot/${ch.id}`), api('/notify/config'), api('/settings'), api(`/radar/watch/${ch.id}`)]);
+    const recent = board.videos.filter(v => v.kind === 'owned').slice(0, 8);
+    body.innerHTML = h`<div class="grid g2">
+      <div class="card"><h2>Autopilot <span class="badge ${s.mode === 'auto' ? 'ok' : s.mode === 'suggest' ? 'info' : ''}">${s.mode}</span></h2>
+        <p class="mini">When an upload runs below 0.6× your usual pace after ${s.minHours} h (or its real CTR is far below your normal), the autopilot diagnoses why. If the packaging is the problem, it writes honest alternative titles and thumbnails, scores them on the radar against the current package, and swaps in a winner that beats it by ${s.minGain}+ points. One swap per video. After 48 h it grades the swap on real CTR and reverts it if CTR dropped.</p>
+        ${!ch.authorized ? h`<div class="note warn">This channel isn't connected with Google, so the autopilot can only suggest. Connect it under Channels to let it apply changes.</div>` : ''}
+        <div class="form cols"><label class="f">Mode<select data-k="autopilot_mode"><option value="auto" ${s.mode === 'auto' ? 'selected' : ''}>Auto — apply winners</option><option value="suggest" ${s.mode === 'suggest' ? 'selected' : ''}>Suggest — I approve</option><option value="off" ${s.mode === 'off' ? 'selected' : ''}>Off</option></select></label>
+          <label class="f">Must win by (radar points)<input type="number" min="1" max="40" data-k="autopilot_min_gain" value="${s.minGain}"></label>
+          <label class="f">Act after (hours)<input type="number" min="6" max="96" data-k="autopilot_min_hours" value="${s.minHours}"></label>
+          <label class="f">Revert if CTR drops by<select data-k="autopilot_revert_drop">${[0.1, 0.15, 0.2, 0.3].map(x => h`<option value="${x}" ${s.revertDrop === x ? 'selected' : ''}>${x * 100}%</option>`).join('')}</select></label></div>
+        <div class="row" style="flex-wrap:wrap;margin-top:8px">${[['autopilot_titles', 'Titles', s.titles], ['autopilot_thumbnails', 'Thumbnails', s.thumbnails], ['autopilot_auto_revert', 'Auto-revert losers', s.autoRevert], ['autopilot_shorts', 'Include Shorts', s.shorts]].map(([k, l, v]) => h`<label class="row mini"><input type="checkbox" data-k="${k}" ${v ? 'checked' : ''}> ${l}</label>`).join('')}</div>
+      </div>
+      <div class="card"><h2>Phone alerts <span class="badge ${nc.channels.length ? 'ok' : 'warn'}">${nc.channels.length ? nc.channels.join(' + ') : 'not set up'}</span></h2>
+        <p class="mini">Breakouts, lagging uploads, autopilot changes and the morning idea list. Free: iMessage is sent by this Mac's Messages app; ntfy is a free phone app (pick any private topic name).</p>
+        <div class="form cols"><label class="f">iMessage to (phone or Apple ID)${nc.imessageAvailable ? '' : h` <span class="badge warn">Mac only</span>`}<input data-k="notify_imessage_to" value="${settingsAll.notify_imessage_to || ''}" placeholder="+1 813 555 0100"></label>
+          <label class="f">ntfy topic<input data-k="notify_ntfy_topic" value="${settingsAll.notify_ntfy_topic || ''}" placeholder="tubedesk-yourname-7x2"></label>
+          <label class="f">Webhook (Slack, Discord, n8n…)<input data-k="notify_webhook_url" value="${settingsAll.notify_webhook_url || ''}" placeholder="https://hooks…"></label>
+          <label class="f">Quiet hours (held, then sent as one digest)<input data-k="notify_quiet" value="${nc.quiet}" placeholder="22-7"></label></div>
+        <div class="row" style="margin-top:10px"><button id="ntest" class="sm">Send a test</button><span class="mini">${nc.quietNow ? 'Quiet hours now — the test is sent anyway.' : ''}</span></div>
+      </div></div>
+      <div class="card" style="margin-top:14px"><h2>Thumbnail bank & source files</h2><p class="mini">Give the autopilot better thumbnails to choose from: upload alternates for a recent video, or point it at the video's source file on this Mac (it then cuts frames and adds bold text). Videos published through TubeDesk already have their source file.</p>
+        ${recent.length ? h`<table><tbody>${recent.map(v => h`<tr><td><div class="vt"><img class="thumb sm" src="${v.thumbnail || ''}"><div class="t">${v.title}</div></div></td><td><span class="mini" data-assets="${v.video_id}">…</span></td><td style="white-space:nowrap"><input type="file" accept="image/*" multiple data-upfor="${v.video_id}" style="display:none"><button class="sm" data-up="${v.video_id}">Add thumbnails</button> <button class="sm" data-src="${v.video_id}">Source file…</button> <button class="sm" data-run="${v.video_id}">Run now</button></td></tr>`).join('')}</tbody></table>` : empty('Recent uploads appear here once the live watch has seen them.')}</div>
+      <h2 style="margin:18px 0 10px">Changes and suggestions</h2>${actions.length ? h`<div class="stack">${actions.map(actionCard).join('')}</div>` : empty('Nothing yet — the autopilot acts only when an upload lags.')}`;
+    const save = async (k, v) => { await api('/settings', { method: 'PUT', body: { [k]: v } }); toast('Saved', 'ok'); };
+    body.querySelectorAll('[data-k]').forEach(el => el.onchange = () => save(el.dataset.k, el.type === 'checkbox' ? (el.checked ? '1' : '0') : el.value.trim()));
+    body.querySelector('#ntest').onclick = async e => { busy(e.target, true); try { const r = await api('/notify/test', { method: 'POST' }); r.errors?.length ? toast(r.errors.join(' · ')) : toast(`Sent via ${r.sent.join(' + ')}`, 'ok'); } catch (x) { err(x); } busy(e.target, false); };
+    const wireActions = root => {
+      root.querySelectorAll('[data-approve]').forEach(b => b.onclick = async () => { busy(b, true); try { await api(`/autopilot/actions/${b.dataset.approve}/approve`, { method: 'POST' }); toast('Applied', 'ok'); autopilot(body); } catch (x) { err(x); busy(b, false); } });
+      root.querySelectorAll('[data-revert]').forEach(b => b.onclick = async () => { busy(b, true); try { await api(`/autopilot/actions/${b.dataset.revert}/revert`, { method: 'POST' }); toast('Original restored', 'ok'); autopilot(body); } catch (x) { err(x); busy(b, false); } });
+    };
+    wireActions(body);
+    for (const el of body.querySelectorAll('[data-assets]')) {
+      api(`/autopilot/assets/${el.dataset.assets}`).then(list => { const th = list.filter(a => a.kind === 'thumbnail').length, src = list.find(a => a.kind === 'source'); el.textContent = `${th} alternate thumbnail${th === 1 ? '' : 's'}${src ? ' · source: ' + src.path.split('/').pop() : ''}`; }).catch(() => { el.textContent = ''; });
+    }
+    body.querySelectorAll('[data-up]').forEach(b => b.onclick = () => body.querySelector(`[data-upfor="${b.dataset.up}"]`).click());
+    body.querySelectorAll('[data-upfor]').forEach(inp => inp.onchange = async e => {
+      const vid = inp.dataset.upfor;
+      try {
+        for (const f of [...e.target.files]) {
+          const dataUrl = await new Promise(res => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.readAsDataURL(f); });
+          const d = await api('/packaging/thumbnail/upload', { method: 'POST', body: { dataUrl, name: f.name } });
+          await api('/autopilot/assets', { method: 'POST', body: { videoId: vid, kind: 'thumbnail', path: d.path, label: f.name } });
+        }
+        toast('Added to the thumbnail bank', 'ok'); autopilot(body);
+      } catch (x) { err(x); }
+    });
+    body.querySelectorAll('[data-src]').forEach(b => b.onclick = async () => { const p = prompt('Full path of the video file on this Mac (e.g. /Users/you/Videos/episode-12.mp4)'); if (!p) return; try { await api('/autopilot/assets', { method: 'POST', body: { videoId: b.dataset.src, kind: 'source', path: p.trim() } }); toast('Source file linked', 'ok'); autopilot(body); } catch (x) { err(x); } });
+    body.querySelectorAll('[data-run]').forEach(b => b.onclick = async () => { busy(b, true); try { const a = await api(`/autopilot/run/${b.dataset.run}`, { method: 'POST', body: { force: true } }); toast(`Autopilot: ${a.status}`, 'ok'); autopilot(body); } catch (x) { err(x); busy(b, false); } });
   }
 
   // ---------- Calibration ----------

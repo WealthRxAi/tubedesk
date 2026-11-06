@@ -1,6 +1,6 @@
 // Read-only channel audit export: identity, full synced catalogue, channel + per-video Analytics for the latest N completed
-// days and the preceding N days, traffic (incl. advertising), retention where available, Studio-import impressions/CTR if
-// present. Every dataset carries its source, exact dates and freshness; anything unavailable is null with a reason.
+// days and the preceding N days, traffic (incl. advertising), retention where available, impressions/CTR from the Reporting API (or a
+// Studio import). Every dataset carries its source, exact dates and freshness; anything unavailable is null with a reason.
 import fs from 'node:fs';
 import path from 'node:path';
 import { db, DATA_DIR } from '../db.js';
@@ -8,6 +8,7 @@ import { analyticsQuery, dateRange } from '../youtube/analytics.js';
 import { getChannel, isAuthorized } from './channels.js';
 import { studioData } from './misc.js';
 import { retention } from './analytics.js';
+import { channelSummary } from './reach.js';
 
 const PER_VIDEO_METRICS = 'views,estimatedMinutesWatched,averageViewDuration,averageViewPercentage,likes,comments,shares,subscribersGained';
 const CHANNEL_METRICS = 'views,estimatedMinutesWatched,averageViewDuration,averageViewPercentage,subscribersGained,subscribersLost,likes,comments,shares';
@@ -144,11 +145,18 @@ export async function channelAudit(channelId, { days = 28, retentionLimit = 60, 
       } catch (e) { out.revenue.windows[name] = { ...w, totals: null, reason: e.message }; }
     }
   }
-  // 7. Impressions / CTR: not exposed by the Analytics API; only via a Studio CSV import.
+  // 7. Impressions / CTR: automatic Reporting API reach reports when available, else a manual Studio CSV import.
+  const rs = channelSummary(channelId, { days: 28 });
   const studio = studioData(channelId);
-  out.impressions_ctr = studio.rows.length
-    ? { source: 'YouTube Studio CSV import (manual)', imported_at: studio.rows[0].imported_at, period_label: studio.rows[0].period_label || null, rows: studio.rows.map(r => ({ video_id: r.video_id, title: r.video_title, impressions: r.impressions, ctr: r.ctr, avg_view_duration_sec: r.avg_view_duration_sec, avg_view_pct: r.avg_view_pct, views: r.views, watch_hours: r.watch_hours })) }
-    : nullWith('Impressions and thumbnail CTR are not available from the YouTube Analytics API; TubeDesk only has them after a YouTube Studio CSV import, and none has been imported for this channel.');
+  if (rs.videos.length) {
+    out.impressions_ctr = { source: rs.source, latest_day: rs.latestDay, window_days: 28, totals: rs.totals, channel_first_3_day_ctr: rs.baseline,
+      rows: rs.videos.map(v => ({ video_id: v.video_id, title: v.title, impressions: v.impressions, ctr: v.ctr })),
+      studio_import: studio.rows.length ? { imported_at: studio.rows[0].imported_at, rows: studio.rows.length } : null };
+  } else {
+    out.impressions_ctr = studio.rows.length
+      ? { source: 'YouTube Studio CSV import (manual)', imported_at: studio.rows[0].imported_at, period_label: studio.rows[0].period_label || null, rows: studio.rows.map(r => ({ video_id: r.video_id, title: r.video_title, impressions: r.impressions, ctr: r.ctr, avg_view_duration_sec: r.avg_view_duration_sec, avg_view_pct: r.avg_view_pct, views: r.views, watch_hours: r.watch_hours })) }
+      : nullWith(`No impressions/CTR yet: the automatic Reporting API feed is ${rs.status.replace(/-/g, ' ')}${rs.lastError ? ' (' + rs.lastError + ')' : ''}, and no YouTube Studio CSV has been imported for this channel.`);
+  }
   // 8. Transcripts: TubeDesk does not store them; fetching costs ~250 Data API units per video.
   out.transcripts = nullWith('TubeDesk does not store transcripts or content summaries. Owner captions can be fetched on demand (captions.list + captions.download ≈ 250 quota units per video), which was not done for this export.');
   return out;

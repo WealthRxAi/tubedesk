@@ -26,11 +26,12 @@ A self-hosted YouTube channel desk for the channels you own: analytics, keyword 
 |---|---|---|
 | **Channels** | Multi-channel workspaces with isolated data; connect with Google (ownership proof) or add by ID/handle/URL; bulk switching | Data API, OAuth |
 | **Video library** | Filter by format/date/text, sort, per-video detail, publishing checklist, first-N-days vs peer comparison, daily view history, packaging-change history, staged metadata edits applied via `videos.update`, CSV export, JSON backup, playlists | Data API |
-| **Analytics** (owner) | Overview with period deltas, daily charts, top videos, audience retention curve with drop detection, traffic sources incl. **real search terms**, suggested-from videos, external sites, geography, age/gender, devices, subscribers gained/lost by day and by video, watch hours + YPP progress, content-type mix, revenue/RPM (YPP channels), publish-slot heatmap, **impressions & CTR via Studio CSV import** | Analytics API, local data, Studio export |
+| **Analytics** (owner) | Overview with period deltas, daily charts, top videos, audience retention curve with drop detection, traffic sources incl. **real search terms**, suggested-from videos, external sites, geography, age/gender, devices, subscribers gained/lost by day and by video, watch hours + YPP progress, content-type mix, revenue/RPM (YPP channels), publish-slot heatmap, **impressions & CTR pulled automatically every day** (Reporting API reach reports; Studio CSV import still available for older periods) | Analytics API, Reporting API, local data |
 | **Keywords** | Autocomplete tree (letters + question prefixes), long-tail and question lists, modifiers, competition evidence from a real search sample with a transparent opportunity score, score history, rising/dropped suggestions | Suggest endpoint (free), Data API |
 | **Outliers** | Library outliers across own + competitor channels (views ÷ channel median, per format), search-driven breakout finder (views ÷ subscribers, velocity), similar videos | Local data, Data API |
 | **Trending & niches** | mostPopular chart by region/category, niche channel finder sized by views-per-video, title structure analysis (patterns, never copied titles) | Data API |
 | **Competitors** | Watchlist, side-by-side comparison, upload feed, daily snapshots → growth, alerts (new uploads, 3× breakouts, title/thumbnail changes), report cards, 90-day scenario projections, packaging history | Data API + scheduler |
+| **Autopilot & daily ideas** | Lagging uploads diagnosed with real CTR (packaging vs reach vs watch time); honest alternative titles + thumbnails cut from your source video, scored on the radar, winner swapped in via the API, graded on CTR after 48 h and auto-reverted if worse; a morning idea list built from competitor breakouts, your winners, real search terms and new autocomplete suggestions, every title radar-scored; phone alerts by iMessage, ntfy or webhook with quiet hours | Reporting API, Analytics API, Data API, AI, ffmpeg |
 | **Virality radar** | Score 1–8 title/thumbnail variants (plus the opening hook) before publishing on 8 axes — topic demand, proven-pattern fit, freshness, title craft, curiosity, emotion, thumbnail, hook — with a predicted multiplier vs your usual views, an 80% range and P(breakout); **calibrated on your own history** with a time-ordered holdout that grades itself; hourly **live watch** of new uploads (yours and competitors') against your usual launch curve with breakout/lagging alerts; prediction-vs-outcome history | Local data, suggest, AI, Data API |
 | **Packaging** | Title analyzer (named heuristics, no CTR claims), AI title generator, description checker/drafter, tag helper (500-char limit enforced), chapter validator, thumbnail preview in YouTube layouts incl. 160px test, AI thumbnail critique, Test & Compare planner, metadata translation, channel health report, staged-edit review, safety preflight | Local + AI |
 | **AI coach** | Quick / deep / max modes grounded in a factual context built from your data, daily ideas, idea generator, channel audit, weekly plan, idea validation, beginner next steps, lessons | Claude Code CLI |
@@ -87,9 +88,13 @@ Logs: `~/Library/Logs/tubedesk.log`. Remove with `launchctl unload ~/Library/Lau
 
 `GET /api/export/audit/<channelId>` writes `data/exports/<handle>-tubedesk-audit.json`: channel identity, the full synced catalogue (id, title, URL, date, duration, format, description, tags), channel and per-video Analytics for the latest 28 complete days and the 28 before (views, watch time, avg view duration, avg % viewed, likes, comments, shares, subs gained, advertising views), traffic sources, retention curves (capped at 60 videos; `?retention=N`), revenue, and Studio-import impressions/CTR when present. Every dataset carries its source and dates; anything unavailable is `null` with a reason. No credentials are included. `?days=7` changes the window.
 
-### Impressions and CTR
+### Impressions and CTR (automatic)
 
-No Google API exposes impressions or click-through rate. YouTube Studio → Analytics → Advanced mode → Content → add the Impressions / CTR / Average view duration columns → Export → CSV, then drop the file on Analytics → *Impressions & CTR*.
+Since January 2026 YouTube's Reporting API publishes daily *reach* reports with thumbnail impressions and impressions CTR. TubeDesk schedules the `channel_reach_basic_a1` report for every Google-connected channel, downloads new reports each morning (07:25) and keeps every row locally (YouTube only keeps reports for a limited time). The first reports arrive about two days after the job is scheduled. One-time setup: in the same Google Cloud project as your OAuth client, enable **YouTube Reporting API** (free, no quota cost). Analytics → *Impressions & CTR* shows daily impressions/CTR, your usual first-3-day CTR and high-impression/low-CTR videos.
+
+### Impressions and CTR (manual import)
+
+For periods before the automatic feed started (reach reports only cover the days after the job is scheduled), import them from YouTube Studio → Analytics → Advanced mode → Content → add the Impressions / CTR / Average view duration columns → Export → CSV, then drop the file on Analytics → *Impressions & CTR*.
 
 ## Virality radar
 
@@ -121,6 +126,18 @@ curl localhost:4949/api/radar/watch/UC…
 
 Settings keys: `radar_enabled`, `radar_watch_cron` (`7 * * * *`), `radar_calibrate_cron` (`40 6 * * 0`), `radar_calibrate_ai`, `radar_ai_limit` (60), `radar_min_age_days` (14), `radar_watch_days` (7), `radar_watch_competitor_days` (3), `radar_watch_competitors` (1), `radar_breakout_x` (2), `radar_curve_exponent` (0.6).
 
+## Autopilot, daily ideas and phone alerts
+
+**Autopilot** (Virality radar → Autopilot). When an upload runs under 0.6× your usual pace after 24 h, or its real CTR is below 75% of your usual first-days CTR, TubeDesk diagnoses why:
+- *packaging* (people see it, don't click) or *unknown* (no CTR yet) → it acts;
+- *reach* (normal CTR, fewer impressions) or *watch time* → it tells you what to do instead and leaves the packaging alone.
+
+To act it writes four honest alternative titles (the description is the source of truth), builds thumbnail candidates (your thumbnail bank, or frames cut from the source video with bold text — automatic for videos published through TubeDesk), scores everything on the radar against the current package in one batch, and swaps in a winner that beats it by `autopilot_min_gain` (8) points through `videos.update` / `thumbnails.set` (100 quota units). One swap per video; never touches a video with your own staged edits; Shorts excluded by default. After 48 h it compares CTR before vs after the change and reverts automatically if CTR fell by more than 15%. Modes: `auto` (default), `suggest` (stage it and ping you to approve), `off`. Every change is logged with before/after and a one-click undo.
+
+**Daily ideas** (06:50). Evidence first: competitor uploads at ≥ 2× their channel's usual views in the last 30 days, your own ≥ 1.75× winners, the real YouTube search terms that brought viewers to you (owner Analytics), and new autocomplete suggestions around your strongest topics. The AI turns that into ideas (three titles, thumbnail text, a hook, format) that must cite their evidence; every title is radar-scored, near-repeats of the last 14 days are dropped, and the top three go to your phone. Dashboard shows today's top three.
+
+**Phone alerts.** Breakouts, lagging uploads, autopilot changes/reverts and the idea list. Channels (all free): **iMessage** sent by the Mac's own Messages app (`notify_imessage_to`; first send asks macOS for permission to control Messages), **ntfy** push app (`notify_ntfy_topic`), or any **webhook** (`notify_webhook_url`; Slack/Discord-compatible body). Quiet hours (`notify_quiet`, default `22-7`) hold messages and send them as one digest afterwards. Kinds: `notify_kinds`.
+
 ## Publishing (YouTube + Instagram) — built for AI agents
 
 TubeDesk can post for you, so any model that can call HTTP or run a command on your machine (Claude Code, Cursor, Codex, ChatGPT, Gemini, Grok, a cron script) can publish without browser automation:
@@ -143,7 +160,7 @@ Jobs: `GET /api/publish/jobs`, `GET /api/publish/jobs/:id?wait=1`, readiness: `G
 claude mcp add tubedesk -- node /path/to/tubedesk/mcp/server.js
 ```
 
-No dependencies; it proxies the local TubeDesk server. Tools: `render_video`, `media_transcode`, `media_probe`, `speech_segments`, `caption_timing`, `extract_frame`, `render_job`, `publish_youtube`, `publish_instagram`, `publish_job`, `publish_status`, `list_channels`, `channel_videos`, `keyword_research`, `outliers`, `radar_score`, `radar_watch`, `radar_calibrate`, `tubedesk_api`.
+No dependencies; it proxies the local TubeDesk server. Tools: `render_video`, `media_transcode`, `media_probe`, `speech_segments`, `caption_timing`, `extract_frame`, `render_job`, `publish_youtube`, `publish_instagram`, `publish_job`, `publish_status`, `list_channels`, `channel_videos`, `keyword_research`, `outliers`, `radar_score`, `radar_watch`, `radar_calibrate`, `daily_ideas`, `autopilot`, `ctr_report`, `tubedesk_api`.
 
 ## Media pipeline (ffmpeg): render from a JSON timeline
 
@@ -171,6 +188,8 @@ Helpers: `POST /api/media/transcode {file, preset: short|youtube|square|contain}
 | videos.update, comments.insert, playlists.insert, thumbnails.set | 50 | applying staged edits, replies, playlists |
 | captions.list + download | 50 + 200 | transcripts of your own videos |
 | playlistItems + videos list (radar watch) | ~2 per channel per hour | live breakout watch (~50/day per channel) |
+| videos.update + thumbnails.set (autopilot) | 50 + 50 | one swap per lagging video (and its revert, if any) |
+| Reporting API (reach reports) | 0 | daily impressions + CTR |
 
 A full sync of a 500-video channel costs ~20 units. search.list results are cached for 24 hours. The quota guard refuses calls that would cross the daily limit (minus a reserve) instead of failing mid-way.
 
@@ -186,9 +205,11 @@ src/db.js                SQLite schema (channels, videos, snapshots, metadata_hi
 src/youtube/client.js    Data API wrapper: caching, quota ledger, suggest endpoint
 src/youtube/oauth.js     Google OAuth, per-channel token storage and refresh
 src/youtube/analytics.js Analytics API v2 queries
-src/services/*.js        channels, analytics, discovery, competitors, packaging, comments, coach, misc, ai, radar (virality radar)
+src/services/*.js        channels, analytics, discovery, competitors, packaging, comments, coach, misc, ai, radar (virality radar),
+                         autopilot, ideas, reach (impressions/CTR), notify (iMessage/ntfy/webhook)
 src/routes/api.js        REST API (/api/…) + /oauth/callback
-src/jobs/scheduler.js    daily snapshot + competitor refresh, hourly radar watch, weekly radar calibration (node-cron)
+src/jobs/scheduler.js    daily snapshot + competitor refresh, daily ideas + reach sync, hourly radar watch (+ autopilot,
+                         quiet-hours flush), weekly radar calibration (node-cron)
 public/                  single-page UI, no build step, no framework
 extension/               Chrome/Brave/Edge extension (Manifest V3) that overlays TubeDesk data on youtube.com
 test/                    unit + integration tests, mock YouTube API, headless UI smoke test

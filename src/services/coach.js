@@ -1,4 +1,5 @@
 // AI coach: builds a factual channel context from local data, then asks the model. Nothing is invented.
+import './reach.js'; // ensures the reach_daily table exists for the context builder
 import { db } from '../db.js';
 import { ytGet } from '../youtube/client.js';
 import { getAccessToken } from '../youtube/oauth.js';
@@ -28,6 +29,8 @@ export function channelContext(channelId, { videos = 40 } = {}) {
   lines.push(`TITLE PATTERNS USED: ${tp.patterns.filter(p => p.count).slice(0, 6).map(p => `${p.pattern} ${Math.round(p.share * 100)}%`).join(', ')}; median length ${tp.medianLength} chars.`);
   lines.push(`METADATA HEALTH: ${health.withIssues}/${health.total} videos with issues: ${Object.entries(health.summary).map(([k, v]) => `${k} ×${v}`).join(', ') || 'none'}.`);
   if (slots.sampleSize >= 8) lines.push(`BEST PUBLISH WEEKDAYS (own data index): ${slots.byWeekday.filter(d => d.n >= 2).sort((a, b) => (b.index || 0) - (a.index || 0)).slice(0, 3).map(d => `${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.dow]} ${d.index?.toFixed(2)}× (n=${d.n})`).join(', ')}.`);
+  const reachSum = db.prepare("SELECT SUM(impressions) AS imp, SUM(impressions * ctr) / NULLIF(SUM(CASE WHEN ctr IS NULL THEN 0 ELSE impressions END), 0) AS ctr, COUNT(DISTINCT video_id) AS n FROM reach_daily WHERE channel_id = ? AND day >= date('now', '-28 days')").get(channelId);
+  if (reachSum?.imp) lines.push(`IMPRESSIONS + CTR (Reporting API, last 28 days): ${reachSum.imp} impressions, impression-weighted CTR ${reachSum.ctr?.toFixed(2)}% across ${reachSum.n} videos.`);
   if (studio.n) lines.push(`STUDIO IMPORT: avg CTR ${(studio.ctr || 0).toFixed(2)}%, avg view % ${(studio.avp || 0).toFixed(1)} across ${studio.n} rows.`);
   if (competitors.length) lines.push(`COMPETITORS TRACKED: ${competitors.map(c => `${c.title} (${c.subscriber_count} subs, ${c.video_count} videos)`).join('; ')}.`);
   const cadence = recent.length > 2 ? median(recent.slice(0, -1).map((v, i) => (new Date(v.published_at) - new Date(recent[i + 1].published_at)) / 86400000)) : null;

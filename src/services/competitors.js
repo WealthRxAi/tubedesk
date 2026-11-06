@@ -1,3 +1,4 @@
+import { onAlert } from './notify.js';
 import { db } from '../db.js';
 import { addChannel, getChannel, publicChannel, syncVideos, channelHistory, hydrateVideo, refreshChannel } from './channels.js';
 import { median, mean, daysSince } from './stats.js';
@@ -79,7 +80,9 @@ export async function refreshAll(ownedId, { maxVideos = 50 } = {}) {
 
 export function addAlert(channelId, kind, title, payload) {
   const r = db.prepare('INSERT INTO alerts (channel_id, kind, title, payload_json) VALUES (?, ?, ?, ?)').run(channelId, kind, title, JSON.stringify(payload || {}));
-  return db.prepare('SELECT * FROM alerts WHERE id = ?').get(r.lastInsertRowid);
+  const alert = db.prepare('SELECT * FROM alerts WHERE id = ?').get(r.lastInsertRowid);
+  onAlert(alert); // forwards the kinds the user wants on their phone (fire-and-forget)
+  return alert;
 }
 export function listAlerts(channelId, { unreadOnly = false, limit = 100 } = {}) {
   return db.prepare(`SELECT * FROM alerts WHERE (channel_id = ? OR channel_id IS NULL) ${unreadOnly ? 'AND read = 0' : ''} ORDER BY created_at DESC LIMIT ?`).all(channelId, limit).map(a => ({ ...a, payload: JSON.parse(a.payload_json || '{}') }));

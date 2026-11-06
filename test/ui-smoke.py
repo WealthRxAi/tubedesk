@@ -10,7 +10,7 @@ subprocess.run(['pkill', '-f', 'node test/mock-youtube.js']); subprocess.run(['p
 import atexit; atexit.register(lambda: [p.kill() for p in (mock, srv)])
 env = dict(os.environ, MOCK_PORT=str(mock_port))
 mock = subprocess.Popen([sys.executable and 'node', 'test/mock-youtube.js'], cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-env2 = dict(os.environ, PORT=str(port), TUBEDESK_DATA_DIR=data, TUBEDESK_NO_SCHEDULER='1', YT_API_BASE=f'http://127.0.0.1:{mock_port}/youtube/v3', YT_ANALYTICS_BASE=f'http://127.0.0.1:{mock_port}/v2/reports', YT_SUGGEST_URL=f'http://127.0.0.1:{mock_port}/complete/search')
+env2 = dict(os.environ, PORT=str(port), TUBEDESK_DATA_DIR=data, TUBEDESK_NO_SCHEDULER='1', YT_API_BASE=f'http://127.0.0.1:{mock_port}/youtube/v3', YT_ANALYTICS_BASE=f'http://127.0.0.1:{mock_port}/v2/reports', YT_SUGGEST_URL=f'http://127.0.0.1:{mock_port}/complete/search', YT_REPORTING_BASE=f'http://127.0.0.1:{mock_port}/reporting/v1', YT_UPLOAD_BASE=f'http://127.0.0.1:{mock_port}/upload')
 srv = subprocess.Popen(['node', 'src/server.js'], cwd=ROOT, env=env2, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 base = f'http://127.0.0.1:{port}'
 
@@ -37,6 +37,13 @@ api(f'/radar/calibrate/{OWNER}?wait=1', 'POST', {'ai': False})
 api('/radar/watch/run', 'POST'); api('/radar/watch/run', 'POST')
 api('/settings', 'PUT', {'ai_provider': 'claude-cli', 'claude_cli_path': os.path.join(ROOT, 'test', 'fake-claude.mjs')})
 api('/radar/score', 'POST', {'channelId': OWNER, 'variants': [{'title': 'Nobody Warns You About Estate Recovery'}, {'title': 'Estate Recovery Explained'}], 'hook': 'Medicaid can take the house after your parent dies.'})
+# Autopilot, CTR feed, daily ideas
+api(f'/reach/{OWNER}/sync', 'POST')
+api('/settings', 'PUT', {'autopilot_min_gain': '1', 'autopilot_max_days': '30', 'notify_quiet': ''})
+api('/autopilot/run/owne0000001', 'POST', {'force': True})
+api('/settings', 'PUT', {'autopilot_mode': 'suggest'}); api('/autopilot/run/owne0000002', 'POST', {'force': True}); api('/settings', 'PUT', {'autopilot_mode': 'auto', 'autopilot_min_gain': '99'})
+api('/autopilot/run/owne0000003', 'POST', {'force': True})
+api(f'/ideas/{OWNER}/run', 'POST', {})
 api('/settings', 'PUT', {'ai_provider': 'none'})
 
 ROUTES = ['/', '/channels', '/library', '/analytics/overview', '/analytics/traffic', '/analytics/audience', '/analytics/subscribers', '/analytics/watch', '/analytics/content', '/analytics/slots', '/analytics/studio', '/analytics/revenue',
@@ -45,7 +52,7 @@ ROUTES = ['/', '/channels', '/library', '/analytics/overview', '/analytics/traff
           '/packaging/title?title=7%20Medicaid%20Rules', '/packaging/description', '/packaging/chapters', '/packaging/thumbnail', '/packaging/translate', '/packaging/health', '/packaging/staged', '/packaging/safety',
           '/coach/chat', '/coach/ideas', '/coach/audit', '/coach/plan', '/coach/validate', '/coach/beginner', '/coach/lessons', '/coach/context',
           '/production/script', '/production/transcript', '/production/clips', '/production/repurpose', '/production/hook', '/comments', '/comments?filter=questions', '/calculators', '/settings',
-          '/radar/score', '/radar/watch', '/radar/calibration', '/radar/history', '/radar/method']
+          '/radar/ideas', '/radar/score', '/radar/watch', '/radar/autopilot', '/radar/calibration', '/radar/history', '/radar/method']
 errors = []
 os.makedirs(os.path.join(ROOT, 'test', 'screenshots'), exist_ok=True)
 with sync_playwright() as p:
@@ -90,6 +97,21 @@ with sync_playwright() as p:
     pg.goto(base + '/#/library'); pg.wait_for_timeout(800); pg.click('tr.clickable'); pg.wait_for_timeout(600); pg.click('#dr-tabs a[data-t=radar]'); pg.wait_for_timeout(900)
     assert 'Radar score at publish' in pg.inner_text('#drawer'), pg.inner_text('#drawer')[:300]
     pg.keyboard.press('Escape')
+    # Autopilot page: applied change with before/after, a suggestion with approve, a skip; approve then undo through the UI
+    pg.goto(base + '/#/radar/autopilot'); pg.wait_for_timeout(1200)
+    t = pg.inner_text('#main'); assert 'Changes and suggestions' in t and 'applied' in t and 'suggested' in t and 'skipped' in t, t[:500]
+    assert 'Before' in t and 'After' in t and 'Diagnosis (packaging)' in t, t[:800]
+    pg.screenshot(path=os.path.join(ROOT, 'test', 'screenshots', 'radar_autopilot_full.png'), full_page=True)
+    pg.click('[data-approve]'); pg.wait_for_timeout(1200); assert pg.locator('[data-approve]').count() == 0
+    pg.click('[data-revert]'); pg.wait_for_timeout(1200); assert 'reverted' in pg.inner_text('#main')
+    # Daily ideas + dashboard card + analytics CTR
+    pg.goto(base + '/#/radar/ideas'); pg.wait_for_timeout(900)
+    t = pg.inner_text('#main'); assert 'Today' in t and 'Evidence' in t and 'Refine in Score' in t, t[:500]
+    pg.screenshot(path=os.path.join(ROOT, 'test', 'screenshots', 'radar_ideas_full.png'), full_page=True)
+    pg.click('[data-score]'); pg.wait_for_timeout(700); assert '5-Year Lookback' in pg.input_value('#titles') or 'Lookback' in pg.input_value('#titles')
+    pg.goto(base + '/#/'); pg.wait_for_timeout(1200); assert "Today's top ideas" in pg.inner_text('#main')
+    pg.goto(base + '/#/analytics/studio'); pg.wait_for_timeout(1200); t = pg.inner_text('#main'); assert 'Impressions & CTR — automatic' in t and 'live' in t, t[:400]
+    pg.screenshot(path=os.path.join(ROOT, 'test', 'screenshots', 'analytics_ctr_full.png'), full_page=True)
     pg.goto(base + '/#/radar/calibration'); pg.wait_for_timeout(600); pg.click('#cal'); pg.wait_for_timeout(4000)
     assert 'Rank accuracy' in pg.inner_text('#main')
     b.close()

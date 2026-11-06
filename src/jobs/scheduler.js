@@ -1,10 +1,13 @@
 // Daily jobs: snapshot every channel + video (history charts, growth, forecasts),
 // refresh competitors (upload feed, breakout alerts, packaging-change history).
 import cron from 'node-cron';
-import { db, getSetting, today } from '../db.js';
+import { db, getSetting, setSetting, today } from '../db.js';
 import { listChannels, refreshChannel, syncVideos } from '../services/channels.js';
 import { refreshAll, addAlert } from '../services/competitors.js';
 import { watchTick, calibrate, buildCorpus } from '../services/radar.js';
+import * as reach from '../services/reach.js';
+import * as ideas from '../services/ideas.js';
+import { aiAvailable } from '../services/radar.js';
 
 let running = null;
 export function runDailySnapshot(opts = {}) {
@@ -47,7 +50,27 @@ export function startScheduler() {
   const lastDay = last ? JSON.parse(last).day : null;
   if (lastDay !== today() && listChannels().length) setTimeout(() => runDailySnapshot().catch(() => {}), 20_000);
   startRadar(tz);
+  startAutopilotJobs(tz);
   return task;
+}
+
+// Daily: pull impressions + CTR from the Reporting API, then build the morning idea list and send the top 3.
+export function startAutopilotJobs(tz) {
+  const reachExpr = getSetting('reach_cron', '25 7 * * *');
+  const ideasExpr = getSetting('ideas_cron', '50 6 * * *');
+  if (cron.validate(reachExpr)) cron.schedule(reachExpr, () => reach.syncAll().then(r => console.log('[reach]', r)).catch(e => console.error('[reach]', e.message)), { timezone: tz });
+  if (cron.validate(ideasExpr) && getSetting('ideas_enabled', '1') === '1') cron.schedule(ideasExpr, () => runIdeas().catch(e => console.error('[ideas]', e.message)), { timezone: tz });
+  console.log(`[scheduler] reach sync "${reachExpr}", daily ideas "${ideasExpr}" (${tz})`);
+  if (listChannels('owned').length) setTimeout(() => reach.syncAll().catch(() => {}), 60_000);
+  // Catch up on today's ideas if the app was off at the scheduled time.
+  setTimeout(() => { if (getSetting('ideas_last_day') !== today() && new Date().getHours() >= 7) runIdeas().catch(() => {}); }, 90_000);
+}
+export async function runIdeas() {
+  if (getSetting('ideas_enabled', '1') !== '1' || !aiAvailable() || !listChannels('owned').length) return [];
+  const r = await ideas.runAll();
+  setSetting('ideas_last_day', today());
+  console.log('[ideas]', r);
+  return r;
 }
 
 // Virality radar: hourly launch-curve watch of new uploads (≈2 quota units per channel per hour) and a weekly

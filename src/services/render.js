@@ -347,3 +347,33 @@ export async function frame({ file, at = 1, output, width }) {
   await run(ffmpeg, ['-y', '-loglevel', 'error', '-ss', String(at), '-i', src, '-frames:v', '1', ...(width ? ['-vf', `scale=${width}:-1`] : []), '-q:v', '2', out]);
   return { file: out };
 }
+
+/**
+ * 1280×720 thumbnail candidate from a video frame with up to two lines of bold text (line 2 in accent yellow).
+ * Used by the radar autopilot when the source file of an upload is on this machine.
+ */
+export async function thumbnailCard({ file, at = 1, text = '', output }) {
+  const ffmpeg = findBin('ffmpeg'); if (!ffmpeg) throw new Error(toolStatus().hint);
+  const src = resolvePath(file);
+  const out = path.resolve(output);
+  fs.mkdirSync(path.dirname(out), { recursive: true });
+  const words = String(text || '').toUpperCase().replace(/\s+/g, ' ').trim().split(' ').filter(Boolean).slice(0, 6);
+  const lines = [];
+  if (words.length) {
+    const half = words.length <= 2 ? words.length : Math.ceil(words.length / 2);
+    lines.push(words.slice(0, half).join(' '));
+    if (words.length > half) lines.push(words.slice(half).join(' '));
+  }
+  const font = fonts().bold || fonts().regular;
+  const longest = Math.max(1, ...lines.map(l => l.length));
+  const size = Math.max(70, Math.min(160, Math.floor(1180 / (longest * 0.62))));
+  const vf = ['scale=1280:720:force_original_aspect_ratio=increase:flags=lanczos', 'crop=1280:720', 'eq=contrast=1.08:saturation=1.18'];
+  if (lines.length && font) {
+    lines.forEach((l, i) => {
+      const y = lines.length === 1 ? `h-th-80` : i === 0 ? `h-${2 * size + 110}` : `h-${size + 80}`;
+      vf.push(`drawtext=fontfile=${font}:text='${esc(l)}':fontcolor=${i === 1 ? '0xFFD60A' : 'white'}:fontsize=${size}:borderw=${Math.max(6, Math.round(size / 12))}:bordercolor=black:x=60:y=${y}`);
+    });
+  }
+  await run(ffmpeg, ['-y', '-loglevel', 'error', '-ss', String(at), '-i', src, '-frames:v', '1', '-vf', vf.join(','), '-q:v', '3', out]);
+  return { file: out };
+}

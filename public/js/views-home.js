@@ -8,6 +8,7 @@
     const [hist, seg, alerts, lib, cs] = await Promise.all([
       api(`/channels/${ch.id}/history?days=90`), api(`/channels/${ch.id}/segments`), api(`/alerts/${ch.id}?unread=1`), api(`/channels/${ch.id}/videos?limit=8`), api(`/scores/channel/${ch.id}`).catch(() => null),
     ]);
+    const ideasToday = await api(`/ideas/${ch.id}?days=2`).catch(() => []);
     let ov = null, ovErr = null;
     if (ch.authorized) { try { ov = await api(`/analytics/${ch.id}/overview?days=28`); } catch (e) { ovErr = e.message; } }
     const first = hist[0], last = hist[hist.length - 1];
@@ -17,6 +18,7 @@
       <div class="page-head"><div><h1>${ch.title}</h1><div class="sub">${ch.handle || ch.id} · ${ch.kind === 'owned' ? (ch.authorized ? 'Google-connected (full analytics)' : 'public data only') : ''} · last synced ${ago(ch.last_synced)}</div></div>
         <div class="actions"><button id="sync" class="sm">Sync now</button><a class="btn sm" href="#/analytics">Analytics</a><a class="btn sm" href="#/coach">Ask the coach</a></div></div>
       ${cs ? h`<div class="card" style="margin-bottom:14px"><div class="row" style="gap:18px;align-items:center"><div class="score ${TD.scoreClass(cs.score)}" style="width:64px;height:64px;font-size:22px">${cs.score}</div><div style="flex:1;min-width:200px"><h2 style="margin:0">Channel score · grade ${cs.grade}</h2><div class="mini">${cs.advice}</div></div><div class="grid g4" style="flex:2;min-width:280px">${raw(Object.entries(cs.components).map(([k, v]) => h`<div><div class="mini">${k}</div><div class="progress"><i style="width:${v}%;background:${v >= 70 ? 'var(--ok)' : v >= 40 ? 'var(--warn)' : 'var(--bad)'}"></i></div><div class="mini">${v}</div></div>`))}</div></div><div class="src">Weights: ${Object.entries(cs.weights).map(([k, w]) => `${k} ${Math.round(w * 100)}%`).join(' · ')}. Based on ${cs.sample.videos} synced videos, ${cs.sample.recent90d} in the last 90 days, ${cs.sample.snapshotDays} days of snapshots.</div></div>` : ''}
+      ${ideasToday.length ? h`<div class="card" style="margin-bottom:14px"><h2>Today's top ideas <a href="#/radar/ideas" class="mini">all ideas</a></h2>${ideasToday.slice(0, 3).map((i, k) => h`<div class="row between" style="padding:7px 0;border-bottom:1px solid var(--line)"><div style="min-width:0"><b>${k + 1}. ${i.best_title}</b><div class="mini">${i.angle}</div></div><div class="row" style="flex:none">${i.score !== null ? raw(TD.scoreRing(i.score)) : ''}<span class="mini">${i.predicted_x ? '~' + i.predicted_x + '× usual' : ''}</span></div></div>`).join('')}</div>` : ''}
       <div class="grid g4">
         ${raw(stat('Subscribers', fmtFull(ch.subscriber_count), subsDelta !== null ? h`<span class="${subsDelta >= 0 ? 'up' : 'down'}">${subsDelta >= 0 ? '+' : ''}${fmtFull(subsDelta)} over ${hist.length}d of snapshots</span>` : h`<span class="muted">snapshots build daily</span>`))}
         ${raw(stat('Total views', fmt(ch.view_count), viewsDelta !== null ? h`<span class="up">+${fmt(viewsDelta)} over ${hist.length}d</span>` : ''))}

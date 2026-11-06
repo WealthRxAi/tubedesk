@@ -1,8 +1,8 @@
 /* Analytics (owner) */
 (() => {
-  const { view, api, h, raw, esc, fmt, fmtFull, pct, dur, date, videoCell, stat, empty, needOwned, needAuth, lineChart, barChart, hbars, err, toast, busy, state, openVideo, delta } = TD;
+  const { view, api, h, raw, esc, fmt, fmtFull, pct, dur, date, ago, videoCell, stat, empty, needOwned, needAuth, lineChart, barChart, hbars, err, toast, busy, state, openVideo, delta } = TD;
   const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  const TABS = [['overview', 'Overview', true], ['traffic', 'Traffic & search terms', true], ['audience', 'Audience', true], ['subscribers', 'Subscribers', true], ['watch', 'Watch hours & YPP', true], ['content', 'Content types', false], ['slots', 'Publish slots', false], ['studio', 'Impressions & CTR (Studio import)', false], ['revenue', 'Revenue', true]];
+  const TABS = [['overview', 'Overview', true], ['traffic', 'Traffic & search terms', true], ['audience', 'Audience', true], ['subscribers', 'Subscribers', true], ['watch', 'Watch hours & YPP', true], ['content', 'Content types', false], ['slots', 'Publish slots', false], ['studio', 'Impressions & CTR', false], ['revenue', 'Revenue', true]];
 
   view('/analytics', async (main, r) => {
     const ch = state.current;
@@ -67,11 +67,28 @@
       <div class="card" style="margin-top:12px"><h2>Weekday × hour (UTC) heatmap</h2><div class="cal"><div></div>${Array.from({ length: 24 }, (_, i) => h`<div class="h">${i}</div>`).join('')}${[0, 1, 2, 3, 4, 5, 6].map(d => h`<div class="h" style="text-align:left">${DOW[d]}</div>${Array.from({ length: 24 }, (_, hh) => { const c = cells[`${d}-${hh}`]; const a = c ? Math.min(1, c.index / max) : 0; return h`<div class="c" title="${c ? `${DOW[d]} ${hh}:00 UTC — ${c.n} uploads, ${c.index.toFixed(2)}× median` : ''}" style="background:${c ? `rgba(90,169,255,${0.15 + a * 0.85})` : ''}"></div>`; })}`)}</div><div class="mini" style="margin-top:8px">Darker = higher indexed views-per-day. Needs ≥ 8 uploads to mean anything; YouTube Studio's "when your viewers are on YouTube" is the only true audience-activity chart.</div></div>`;
   }
   async function studio(ch) {
-    const s = await api(`/analytics/${ch.id}/studio`);
-    return h`<div class="grid g2"><div class="card"><h2>Import YouTube Studio export</h2><p class="mini">Impressions and click-through rate are not exposed by any API. Export them from Studio and paste or drop the CSV here:<br>YouTube Studio → Analytics → <b>Advanced mode</b> → Content tab → add columns <i>Impressions</i>, <i>Impressions click-through rate</i>, <i>Average view duration</i> → Export current view → CSV.</p>
+    const [s, r] = await Promise.all([api(`/analytics/${ch.id}/studio`), api(`/reach/${ch.id}?days=28`).catch(() => null)]);
+    return h`${raw(reachSection(r, ch))}<h2 style="margin:18px 0 10px">Manual Studio import <span class="mini">(optional — for periods older than the automatic feed)</span></h2><div class="grid g2"><div class="card"><h2>Import YouTube Studio export</h2><p class="mini">The automatic feed above covers days after it was switched on. For older periods, export from Studio and paste or drop the CSV here:<br>YouTube Studio → Analytics → <b>Advanced mode</b> → Content tab → add columns <i>Impressions</i>, <i>Impressions click-through rate</i>, <i>Average view duration</i> → Export current view → CSV.</p>
       <div class="dropzone" id="drop">Drop a Studio CSV here, or click to choose</div><input type="file" id="file" accept=".csv,text/csv" style="display:none"><textarea id="csv" class="mono" placeholder="…or paste CSV text" style="margin-top:8px;min-height:80px"></textarea><div class="row" style="margin-top:8px"><input id="period" placeholder="Label, e.g. 2026-10 28d"><button id="imp" class="primary">Import</button></div></div>
       <div class="card"><h2>Latest import</h2>${s.rows.length ? h`<div class="grid g2">${raw(stat('Impression-weighted CTR', s.impressionWeightedCtr !== null ? s.impressionWeightedCtr.toFixed(2) + '%' : '—'))}${raw(stat('Rows', s.rows.length, h`<span class="muted">${s.imports} import(s) stored</span>`))}</div><h3 style="margin-top:12px">High impressions, low CTR (packaging candidates)</h3>${s.lowCtrHighImpressions.map(r => h`<div class="row between" style="padding:5px 0;border-bottom:1px solid var(--line)"><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.lib_title || r.video_title || r.video_id}</span><span class="badge">${fmt(r.impressions)} imp</span><span class="badge bad">${r.ctr?.toFixed(2)}% CTR</span></div>`).join('') || h`<div class="muted">Nothing below average.</div>`}` : h`<div class="muted">No import yet.</div>`}</div></div>
       ${s.rows.length ? h`<div class="card" style="margin-top:12px"><h2>All rows</h2><table><thead><tr><th>Video</th><th class="num">Impressions</th><th class="num">CTR</th><th class="num">Avg view dur</th><th class="num">Avg %</th><th class="num">Views</th></tr></thead><tbody>${s.rows.map(r => h`<tr><td>${r.lib_title || r.video_title || r.video_id}</td><td class="num">${fmtFull(r.impressions)}</td><td class="num">${r.ctr !== null ? r.ctr.toFixed(2) + '%' : '—'}</td><td class="num">${r.avg_view_duration_sec ? dur(Math.round(r.avg_view_duration_sec)) : '—'}</td><td class="num">${r.avg_view_pct !== null ? r.avg_view_pct.toFixed(1) + '%' : '—'}</td><td class="num">${fmtFull(r.views)}</td></tr>`).join('')}</tbody></table></div>` : ''}`;
+  }
+  function reachSection(r, ch) {
+    if (!r) return '';
+    const statusNote = {
+      'not-connected': 'Connect this channel with Google (Channels) to pull impressions and CTR automatically every day.',
+      'not-started': 'Not started yet — the first sync schedules YouTube\'s daily reach report for this channel.',
+      'waiting-for-first-report': `Reach report scheduled ${r.jobCreated ? ago(r.jobCreated) : ''}. YouTube delivers the first daily reports about two days after scheduling; TubeDesk checks every morning.`,
+      error: `Last sync failed: ${r.lastError}`,
+    }[r.status];
+    const fmtCtr = v => v === null || v === undefined ? '—' : v.toFixed(2) + '%';
+    return h`<div class="card"><div class="row between"><h2>Impressions & CTR — automatic <span class="badge ${r.status === 'ok' ? 'ok' : r.status === 'error' ? 'bad' : 'warn'}">${r.status === 'ok' ? 'live' : r.status.replace(/-/g, ' ')}</span></h2><button class="sm" id="reach-sync">Sync now</button></div>
+      ${statusNote ? h`<div class="note ${r.status === 'error' ? 'bad' : 'warn'}" style="margin:8px 0">${statusNote}</div>` : ''}
+      ${r.videos.length ? h`<div class="grid g4" style="margin-top:8px">${raw(stat('Impressions (28d)', fmt(r.totals.impressions)))}${raw(stat('Impression-weighted CTR', fmtCtr(r.totals.ctr)))}${raw(stat('Your usual first-3-day CTR', fmtCtr(r.baseline?.ctr), h`<span class="muted">${r.baseline ? `median of ${r.baseline.n} uploads` : 'needs 3 uploads with data'}</span>`))}${raw(stat('Latest day', r.latestDay || '—'))}</div>
+        <div class="grid g2" style="margin-top:12px"><div class="card"><h2>Daily impressions</h2>${raw(lineChart([{ values: r.daily.map(d => d.impressions) }], { labels: r.daily.map(d => d.day) }))}</div><div class="card"><h2>Daily CTR</h2>${raw(lineChart([{ values: r.daily.map(d => d.ctr === null ? null : +d.ctr.toFixed(2)) }], { labels: r.daily.map(d => d.day) }))}</div></div>
+        <h3 style="margin-top:12px">High impressions, low CTR — packaging fix candidates</h3>${r.lowCtrHighImpressions.length ? h`<table><tbody>${r.lowCtrHighImpressions.map(v => h`<tr><td>${v.title || v.video_id}</td><td class="num">${fmtFull(v.impressions)} impr.</td><td class="num">${fmtCtr(v.ctr)}</td></tr>`).join('')}</tbody></table>` : h`<div class="mini">None below 80% of your average.</div>`}
+        <h3 style="margin-top:12px">All videos (28 days)</h3><table><thead><tr><th>Video</th><th class="num">Impressions</th><th class="num">CTR</th><th class="num">Views (lifetime)</th></tr></thead><tbody>${r.videos.slice(0, 50).map(v => h`<tr><td>${v.title || v.video_id}</td><td class="num">${fmtFull(v.impressions)}</td><td class="num">${fmtCtr(v.ctr)}</td><td class="num">${fmtFull(v.view_count)}</td></tr>`).join('')}</tbody></table>` : ''}
+      <div class="src">${r.source}${r.lastSync ? ' · last sync ' + ago(r.lastSync) : ''}</div></div>`;
   }
   async function revenue(ch, days) {
     const r = await api(`/analytics/${ch.id}/revenue?days=${days}`);
@@ -79,6 +96,8 @@
     return h`<div class="grid g4">${raw(stat('Estimated revenue', '$' + r.totals.revenue.toFixed(2)))}${raw(stat('RPM', r.totals.rpm !== null ? '$' + r.totals.rpm.toFixed(2) : '—'))}${raw(stat('Monetized playbacks', fmt(r.totals.monetized)))}${raw(stat('Views', fmt(r.totals.views)))}</div><div class="card" style="margin-top:12px"><h2>Daily revenue</h2>${raw(lineChart([{ values: r.daily.map(d => d.estimatedRevenue) }], { labels: r.daily.map(d => d.day), format: x => '$' + x.toFixed(0) }))}</div><div class="src">${r.source}</div>`;
   }
   function wire(body, ch) {
+    const rs = body.querySelector('#reach-sync');
+    if (rs) rs.onclick = async e => { busy(e.target, true); try { const r = await api(`/reach/${ch.id}/sync`, { method: 'POST' }); r.error ? toast(r.error) : toast(r.skipped || `${r.newReports} new report(s), ${r.rows} rows`, 'ok'); TD.route(); } catch (x) { err(x); busy(e.target, false); } };
     const drop = body.querySelector('#drop'); if (!drop) return;
     const file = body.querySelector('#file'), ta = body.querySelector('#csv');
     drop.onclick = () => file.click();

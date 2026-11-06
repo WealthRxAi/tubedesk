@@ -31,7 +31,7 @@ export const saved = {
   remove: (id) => db.prepare('DELETE FROM saved_items WHERE id = ?').run(id).changes,
 };
 
-// ---------- YouTube Studio CSV import (impressions, CTR, AVD — not exposed by any API) ----------
+// ---------- YouTube Studio CSV import (impressions, CTR, AVD) — manual fallback for periods before the Reporting API feed ----------
 export function parseCsv(text) {
   const rows = [];
   let row = [], field = '', inQ = false;

@@ -21,11 +21,15 @@ import * as exp from '../services/export.js';
 import * as pub from '../services/publish.js';
 import * as ren from '../services/render.js';
 import * as radar from '../services/radar.js';
+import * as notifier from '../services/notify.js';
+import * as reach from '../services/reach.js';
+import * as autopilot from '../services/autopilot.js';
+import * as ideas from '../services/ideas.js';
 import { runDailySnapshot } from '../jobs/scheduler.js';
 
 export const api = Router();
 const w = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
-const SECRET_KEYS = ['yt_api_key', 'google_client_secret', 'anthropic_api_key', 'ig_access_token'];
+const SECRET_KEYS = ['yt_api_key', 'google_client_secret', 'anthropic_api_key', 'ig_access_token', 'notify_webhook_url', 'notify_ntfy_topic'];
 
 // ---------- status & settings ----------
 api.get('/status', w(async (req, res) => {
@@ -33,7 +37,7 @@ api.get('/status', w(async (req, res) => {
   res.json({
     configured: { apiKey: !!s.yt_api_key, oauth: !!(s.google_client_id && s.google_client_secret) },
     ai: await ai.status(), quota: quotaToday(), channels: ch.listChannels().length,
-    lastSnapshot: s.last_snapshot ? JSON.parse(s.last_snapshot) : null, version: '1.3.0', dataDir: DATA_DIR,
+    lastSnapshot: s.last_snapshot ? JSON.parse(s.last_snapshot) : null, version: '1.4.0', dataDir: DATA_DIR,
   });
 }));
 api.get('/settings', (req, res) => {
@@ -318,6 +322,32 @@ api.get('/radar/curve/:video', (req, res) => { const c = radar.watchCurve(req.pa
 api.get('/radar/history/:channel', (req, res) => res.json(radar.history(req.params.channel, { limit: Number(req.query.limit || 100) })));
 api.post('/radar/scores/:id/link', (req, res) => res.json({ updated: radar.linkScore(req.params.id, req.body?.videoId || null) }));
 
+// ---------- phone alerts ----------
+api.get('/notify/config', (req, res) => { const c = notifier.config(); res.json({ ...c, ntfyTopic: c.ntfyTopic ? '••••' + c.ntfyTopic.slice(-4) : '', webhookUrl: c.webhookUrl ? '••••' + c.webhookUrl.slice(-6) : '', channels: notifier.channelsConfigured(c), defaultKinds: notifier.DEFAULT_KINDS, quietNow: notifier.inQuietHours() }); });
+api.post('/notify/test', w(async (req, res) => res.json(await notifier.test())));
+api.get('/notify/log', (req, res) => res.json(notifier.log(Number(req.query.limit || 50))));
+
+// ---------- impressions + CTR (YouTube Reporting API reach reports) ----------
+api.get('/reach/:channel', (req, res) => res.json(reach.channelSummary(req.params.channel, { days: Number(req.query.days || 28) })));
+api.post('/reach/:channel/sync', w(async (req, res) => res.json(await reach.syncChannel(req.params.channel))));
+api.get('/reach/video/:id', (req, res) => res.json(reach.videoReach(req.params.id) || { impressions: null, ctr: null }));
+
+// ---------- radar autopilot ----------
+api.get('/autopilot/:channel', (req, res) => res.json({ settings: autopilot.settings(), actions: autopilot.listActions(req.params.channel, Number(req.query.limit || 50)) }));
+api.get('/autopilot/diagnose/:video', (req, res) => { const v = db.prepare('SELECT * FROM videos WHERE id = ?').get(req.params.video); v ? res.json(autopilot.diagnose(v, { paceIndex: db.prepare('SELECT idx FROM radar_watch WHERE video_id = ?').get(v.id)?.idx ?? null })) : res.status(404).json({ error: 'video not synced' }); });
+api.post('/autopilot/run/:video', w(async (req, res) => res.json(await autopilot.runForVideo(req.params.video, { force: req.body?.force !== false, paceIndex: db.prepare('SELECT idx FROM radar_watch WHERE video_id = ?').get(req.params.video)?.idx ?? null }))));
+api.post('/autopilot/actions/:id/approve', w(async (req, res) => res.json(await autopilot.approve(Number(req.params.id)))));
+api.post('/autopilot/actions/:id/revert', w(async (req, res) => res.json(await autopilot.revert(Number(req.params.id)))));
+api.post('/autopilot/evaluate', w(async (req, res) => res.json(await autopilot.evaluatePending())));
+api.get('/autopilot/assets/:video', (req, res) => res.json(autopilot.listAssets(req.params.video)));
+api.post('/autopilot/assets', (req, res) => { try { res.json(autopilot.addAsset(req.body || {})); } catch (e) { res.status(e.status || 400).json({ error: e.message }); } });
+api.delete('/autopilot/assets/:id', (req, res) => res.json({ removed: autopilot.removeAsset(Number(req.params.id)) }));
+
+// ---------- daily idea list ----------
+api.get('/ideas/:channel', (req, res) => res.json(ideas.list(req.params.channel, { days: Number(req.query.days || 14), status: req.query.status || null })));
+api.post('/ideas/:channel/run', w(async (req, res) => res.json(await ideas.runDaily(req.params.channel, { count: Number(req.body?.count || getSetting('ideas_count', 8)), notifyPhone: req.body?.notify !== false }))));
+api.post('/ideas/item/:id/status', (req, res) => { try { res.json({ updated: ideas.setStatus(Number(req.params.id), req.body?.status) }); } catch (e) { res.status(400).json({ error: e.message }); } });
+
 // ---------- browser extension ----------
 // Watch page: public stats for any video + outlier context from a cheap sample of that channel's recent uploads (≤ 3 units when uncached).
 // Recent uploads of a channel (≤50, 1 quota unit for the playlist page + 1 for stats; cached 6h).
@@ -533,6 +563,15 @@ VIRALITY RADAR (score before you publish; watch after)
   POST /api/radar/watch/run                     hourly launch-curve check of new uploads (runs on its own every hour)
   GET  /api/radar/watch/:channelId              velocity index vs the usual launch curve, status, alerts
   GET  /api/radar/history/:channelId            scored ideas vs how they actually did
+
+AUTOPILOT, IDEAS, CTR, PHONE
+  GET  /api/ideas/:channelId                    today's (and recent) radar-scored video ideas with their evidence
+  POST /api/ideas/:channelId/run                build today's list now
+  GET  /api/autopilot/:channelId                autopilot settings + every title/thumbnail change it made or suggested
+  POST /api/autopilot/run/:videoId              diagnose + generate + score + swap now (respects autopilot_mode)
+  POST /api/autopilot/actions/:id/revert        put the original title/thumbnail back
+  GET  /api/reach/:channelId                    impressions + CTR from the Reporting API (daily, ~2-day delay)
+  POST /api/notify/test                         send a test alert to the configured phone channels
 
 CHECK LATER
   GET /api/publish/jobs/:id        GET /api/render/jobs/:id        GET /api/publish/jobs        GET /api/publish/status
