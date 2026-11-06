@@ -62,3 +62,21 @@ test('thumbnail card: 1280×720 frame with text', { skip: !FFMPEG }, async () =>
     assert.ok(fs.statSync(out).size < 2 * 1024 * 1024, 'under YouTube\'s 2 MB thumbnail limit');
   }
 });
+
+test('autopilot acts below 0.6× usual pace only, with a trustworthy baseline, inside the age window', async () => {
+  const ap = await import('../src/services/autopilot.js');
+  const v = { id: 'unitvid0001', channel_id: 'UCunit', published_at: new Date(Date.now() - 2 * 86400000).toISOString(), is_short: 0, title: 't' };
+  const run = (o) => ap.shouldRun(v, { ageHours: 40, confidence: 'high', paceIndex: 0.5, ...o });
+  assert.equal(run({}).run, true);
+  assert.equal(run({ paceIndex: 0.65 }).run, false, '0.6–0.7 is "lagging" on the board but not enough to act');
+  assert.equal(run({ confidence: 'low' }).run, false, 'estimated baselines never trigger a swap');
+  assert.equal(run({ ageHours: 10 }).why, 'outside the age window');
+  assert.equal(ap.shouldRun({ ...v, is_short: 1 }, { ageHours: 40, confidence: 'high', paceIndex: 0.2 }).run, false, 'Shorts excluded by default');
+});
+
+test('day arithmetic is calendar-based (daylight-saving safe)', () => {
+  assert.equal(reach.addDays('2026-11-01', 2), '2026-11-03'); // US DST ends 2026-11-01
+  assert.equal(reach.addDays('2026-03-07', 1), '2026-03-08');
+  assert.equal(reach.addDays('2026-12-31', 1), '2027-01-01');
+  assert.equal(reach.addDays('2026-11-05', 0), '2026-11-05');
+});

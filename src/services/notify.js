@@ -133,13 +133,18 @@ export async function flushHeld() {
   const c = config();
   if (inQuietHours(new Date(), c.quiet)) return { flushed: 0 };
   const held = db.prepare("SELECT * FROM notify_log WHERE status = 'held' ORDER BY id").all();
-  if (!held.length) return { flushed: 0 };
-  if (held.length === 1) { await deliver(held[0], c); return { flushed: 1 }; }
+  if (!held.length || !channelsConfigured(c).length) return { flushed: 0 };
+  if (held.length === 1) {
+    const res = await deliver(held[0], c);
+    if (!res.sent.length) db.prepare("UPDATE notify_log SET status = 'held' WHERE id = ?").run(held[0].id); // retry next hour
+    return { flushed: res.sent.length ? 1 : 0, ...res };
+  }
   const digest = { id: 0, kind: 'digest', title: `TubeDesk: ${held.length} alerts overnight`, body: held.map(h => '• ' + h.title).join('\n').slice(0, 1500), url: null };
   const r = db.prepare("INSERT INTO notify_log (kind, title, body, status) VALUES ('digest', ?, ?, 'queued')").run(digest.title, digest.body);
   const res = await deliver({ ...digest, id: r.lastInsertRowid }, c);
-  db.prepare(`UPDATE notify_log SET status = ?, sent_at = datetime('now') WHERE id IN (${held.map(() => '?').join(',')})`).run(res.sent.length ? 'sent' : 'failed', ...held.map(h => h.id));
-  return { flushed: held.length, ...res };
+  // Delivered → mark the held messages sent. Failed → keep them held so the next hourly flush retries.
+  if (res.sent.length) db.prepare(`UPDATE notify_log SET status = 'sent', sent_at = datetime('now') WHERE id IN (${held.map(() => '?').join(',')})`).run(...held.map(h => h.id));
+  return { flushed: res.sent.length ? held.length : 0, ...res };
 }
 
 /** Called for every in-app alert: forwards the kinds the user wants on the phone. */

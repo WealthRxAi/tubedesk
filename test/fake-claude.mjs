@@ -42,7 +42,7 @@ process.stdin.on('end', () => {
       key,
       curiosity: 35 + (h % 50) + (/\?|why|nobody|until/i.test(title) ? 10 : 0),
       emotion: /shock|nobody|stop|warn|mistake|cost/i.test(title) ? 82 : 44,
-      thumbnail: imgNo ? (/\/autopilot-[^/]*$/.test(imgPath) ? 88 : 61) : null,
+      thumbnail: imgNo ? (/\/autopilot-(?!orig-)[^/]*$/.test(imgPath) ? 88 : 61) : null,
       hook: hook.trim() === 'none' ? null : 72,
       why: `rated ${title.slice(0, 20)}`,
       fix: 'Name the specific dollar amount in the title.',

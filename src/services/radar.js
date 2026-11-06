@@ -804,11 +804,9 @@ async function watchTickInner({ log = () => {} } = {}) {
     if (t.kind === 'owned' && !existing) linkScores(v.channel_id, v);
     if (t.kind === 'owned') {
       // Real CTR/impressions from the Reporting API (arrives ~2 days after each day), vs the channel's usual first days.
-      const r = reach.videoReach(v.id);
-      if (r) {
-        const b = reach.channelBaseline(v.channel_id, { days: Math.max(1, Math.min(3, r.days)), excludeId: v.id, isShort: !!v.is_short });
-        db.prepare('UPDATE radar_watch SET ctr = ?, impressions = ?, ctr_vs_channel = ? WHERE video_id = ?').run(r.ctr, r.impressions, b && r.ctr !== null ? r.ctr / b.ctr : null, v.id);
-      }
+      const lc = reach.launchComparison(v.id, v.channel_id, { isShort: !!v.is_short });
+      const r = lc?.video || reach.videoReach(v.id);
+      if (r) db.prepare('UPDATE radar_watch SET ctr = ?, impressions = ?, ctr_vs_channel = ? WHERE video_id = ?').run(r.ctr, r.impressions, lc?.baseline && r.ctr !== null ? r.ctr / lc.baseline.ctr : null, v.id);
       autopilotQueue.push({ video: v, status, ageHours: ageH, confidence: base.confidence, paceIndex: index });
     }
   }
@@ -823,11 +821,11 @@ async function watchTickInner({ log = () => {} } = {}) {
     try {
       const ap = await import('./autopilot.js');
       for (const q of autopilotQueue) {
-        const dbVideo = db.prepare('SELECT * FROM videos WHERE id = ?').get(q.video.id) || { ...q.video, is_short: q.video.is_short ? 1 : 0 };
-        const d = ap.shouldRun(dbVideo, q);
-        db.prepare('UPDATE radar_watch SET autopilot_note = ? WHERE video_id = ?').run(d.run ? 'running' : d.why + (d.diagnosis?.kind && d.diagnosis.kind !== 'unknown' ? ` · ${d.diagnosis.kind}` : ''), q.video.id);
-        if (!d.run) continue;
         try {
+          const dbVideo = db.prepare('SELECT * FROM videos WHERE id = ?').get(q.video.id) || { ...q.video, is_short: q.video.is_short ? 1 : 0 };
+          const d = ap.shouldRun(dbVideo, q);
+          db.prepare('UPDATE radar_watch SET autopilot_note = ? WHERE video_id = ?').run(d.run ? 'running' : d.why + (d.diagnosis?.kind && d.diagnosis.kind !== 'unknown' ? ` · ${d.diagnosis.kind}` : ''), q.video.id);
+          if (!d.run) continue;
           const a = await ap.runForVideo(q.video.id, { trigger: d.trigger, paceIndex: q.paceIndex, diagnosis: d.diagnosis });
           db.prepare('UPDATE radar_watch SET autopilot_note = ? WHERE video_id = ?').run(`${a.status}: ${a.message}`.slice(0, 300), q.video.id);
           summary.autopilot.push({ videoId: q.video.id, status: a.status });

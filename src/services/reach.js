@@ -120,13 +120,19 @@ export async function syncAll() {
   return out;
 }
 
-/** Impression-weighted CTR + impressions for a video over its first `days` days (or all days when null). */
+// Reporting API days are YouTube Analytics days (Pacific time), so publish dates are converted the same way.
+export const ptDay = ms => new Date(ms).toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+/** Calendar arithmetic on YYYY-MM-DD strings (no time zone, so daylight-saving changes can't skip or repeat a day). */
+export const addDays = (day, n) => { const [y, m, d] = day.split('-').map(Number); return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10); };
+
+/** Impression-weighted CTR + impressions for a video over its first `days` calendar days (publish day = day 1), or all days. */
 export function videoReach(videoId, { days = null } = {}) {
   const v = db.prepare('SELECT published_at FROM videos WHERE id = ?').get(videoId);
   let rows = db.prepare('SELECT day, impressions, ctr FROM reach_daily WHERE video_id = ? ORDER BY day').all(videoId);
   if (days && v?.published_at) {
-    const last = new Date(Date.parse(v.published_at) + days * 86400000).toISOString().slice(0, 10);
-    rows = rows.filter(r => r.day <= last);
+    const pub = Date.parse(v.published_at);
+    const first = ptDay(pub), last = addDays(first, days - 1);
+    rows = rows.filter(r => r.day >= first && r.day <= last);
   }
   if (!rows.length) return null;
   const imp = rows.reduce((a, r) => a + r.impressions, 0);
@@ -135,13 +141,28 @@ export function videoReach(videoId, { days = null } = {}) {
   return { impressions: imp, ctr, days: rows.length, firstDay: rows[0].day, lastDay: rows.at(-1).day };
 }
 
-/** The channel's typical CTR/impressions over the first `days` days of earlier uploads (median across videos). */
+/** The channel's typical CTR/impressions over the first `days` days of earlier uploads (median; peers need the full window). */
 export function channelBaseline(channelId, { days = 3, excludeId = null, isShort = null } = {}) {
   const vids = db.prepare(`SELECT DISTINCT r.video_id FROM reach_daily r JOIN videos v ON v.id = r.video_id
     WHERE r.channel_id = ? AND r.video_id != ? ${isShort === null ? '' : 'AND v.is_short = ' + (isShort ? 1 : 0)}`).all(channelId, excludeId || '');
-  const per = vids.map(x => videoReach(x.video_id, { days })).filter(r => r && r.ctr !== null && r.impressions >= 50);
+  const per = vids.map(x => videoReach(x.video_id, { days })).filter(r => r && r.days >= days && r.ctr !== null && r.impressions >= 50);
   if (per.length < 3) return null;
   return { ctr: median(per.map(r => r.ctr)), impressions: median(per.map(r => r.impressions)), n: per.length, days };
+}
+
+/**
+ * Like-for-like launch comparison: the video's first n days (n = days of data it has since publishing, max `maxDays`)
+ * against the channel's usual first n days. null when the video has no data from its launch days.
+ */
+export function launchComparison(videoId, channelId, { isShort = null, maxDays = 3 } = {}) {
+  const v = db.prepare('SELECT published_at FROM videos WHERE id = ?').get(videoId);
+  if (!v?.published_at) return null;
+  const launch = videoReach(videoId, { days: maxDays });
+  if (!launch || launch.firstDay !== ptDay(Date.parse(v.published_at))) return null; // reports started after launch
+  const n = launch.days;
+  const r = videoReach(videoId, { days: n });
+  const base = channelBaseline(channelId, { days: n, excludeId: videoId, isShort });
+  return { video: r, baseline: base, days: n };
 }
 
 /** Everything the Analytics → Impressions & CTR tab needs. */

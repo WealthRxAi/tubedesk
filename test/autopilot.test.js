@@ -7,7 +7,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { startMock, calls, REPORTING } from './mock-youtube.js';
+import { startMock, calls, REPORTING, TITLE_OVERRIDES } from './mock-youtube.js';
 
 const ROOT = path.join(path.dirname(new URL(import.meta.url).pathname), '..');
 const FAKE_CLAUDE = path.join(ROOT, 'test', 'fake-claude.mjs');
@@ -106,6 +106,7 @@ test('watch triggers autopilot on the low-CTR upload: new title + generated thum
   assert.equal(a.status, 'applied', a.message);
   assert.equal(a.changed, 'title,thumbnail');
   assert.equal(a.before_title, before);
+  assert.ok(/^\/data\/thumbs\/autopilot-orig-/.test(a.before_thumb), 'fresh copy of the live thumbnail saved for undo');
   assert.ok(a.after_title && a.after_title !== before);
   assert.ok(a.candidates.titles.length === 3, 'duplicate of the current title dropped');
   assert.equal(a.candidates.thumbnails.length, 3, 'three frames cut from the source file');
@@ -141,6 +142,9 @@ test('a swap that lowers CTR is graded after 48 h and reverted automatically', {
   assert.ok(calls.slice(mark).some(c => c.path.endsWith('/upload/thumbnails/set')), 'original thumbnail restored');
   assert.equal((await ok(`/channels/${OWNER}/videos?limit=5`)).videos.find(v => v.id === vidId(1)).title, a.before_title);
   assert.ok(await waitFor(() => received.some(m => /^Autopilot reverted/.test(m.title))));
+  const w = await ok('/radar/watch/run', { method: 'POST' });
+  assert.equal(w.autopilot.length, 0, 'a reverted video is not swapped again on its own');
+  assert.ok(/reverted/.test((await ok(`/radar/watch/${OWNER}`)).videos.find(v => v.video_id === vidId(1)).autopilot_note));
 });
 
 test('auto-revert leaves the title alone when the owner edited it after the swap', async () => {
@@ -149,7 +153,7 @@ test('auto-revert leaves the title alone when the owner edited it after the swap
   assert.equal(a.status, 'applied', a.message);
   const again = await ok(`/autopilot/run/${vidId(4)}`, { method: 'POST', body: { force: true } });
   assert.equal(again.id, a.id, 'an open change blocks a second run on the same video');
-  db.prepare('UPDATE videos SET title = ? WHERE id = ?').run('My own newer title', vidId(4));
+  TITLE_OVERRIDES[vidId(4)] = 'My own newer title'; // the owner retitled it in Studio
   const swapDay = new Date(Date.now() - 6 * 86400000).toISOString();
   db.prepare('UPDATE autopilot_actions SET applied_at = ? WHERE id = ?').run(swapDay, a.id);
   db.prepare('UPDATE reach_daily SET ctr = CASE WHEN day > ? THEN 1.0 ELSE 3.0 END WHERE video_id = ?').run(swapDay.slice(0, 10), vidId(4));
@@ -158,7 +162,8 @@ test('auto-revert leaves the title alone when the owner edited it after the swap
   assert.equal(graded.find(g => g.id === a.id).reverted, false);
   assert.ok(!calls.slice(mark).some(c => c.method === 'PUT'), 'nothing written to YouTube');
   const r = (await ok(`/autopilot/${OWNER}`)).actions.find(x => x.id === a.id);
-  assert.ok(/you have edited the title since/.test(r.message));
+  assert.equal(r.status, 'kept'); assert.ok(/you changed it to "My own newer title"/.test(r.outcome), r.outcome);
+  assert.equal(TITLE_OVERRIDES[vidId(4)], 'My own newer title', 'owner title untouched');
 });
 
 test('suggest mode stages instead of applying; approve then undo', async () => {
@@ -169,17 +174,42 @@ test('suggest mode stages instead of applying; approve then undo', async () => {
   assert.ok(/suggest mode/.test(a.message));
   assert.ok(!calls.slice(mark).some(c => c.method === 'PUT'), 'nothing written to YouTube');
   const staged = await ok(`/packaging/staged/${OWNER}`);
-  assert.ok(staged.some(s => s.video_id === vidId(2) && s.new_value === a.after_title));
+  assert.ok(!staged.some(s => s.video_id === vidId(2)), 'suggestions stay out of the shared staged-edits queue');
+  const dup = await ok(`/autopilot/run/${vidId(2)}`, { method: 'POST', body: { force: true } });
+  assert.equal(dup.id, a.id, 'an open suggestion blocks a second run');
   const ap = await ok(`/autopilot/actions/${a.id}/approve`, { method: 'POST' });
   assert.equal(ap.status, 'applied');
   assert.ok(calls.slice(mark).some(c => c.method === 'PUT' && c.path.endsWith('/videos')));
+  assert.equal((await api(`/autopilot/actions/${a.id}/approve`, { method: 'POST' })).status, 409, 'cannot approve twice');
   const rv = await ok(`/autopilot/actions/${a.id}/revert`, { method: 'POST' });
   assert.equal(rv.status, 'reverted');
-  assert.equal((await api(`/autopilot/actions/${a.id}/revert`, { method: 'POST' })).status, 400, 'cannot revert twice');
+  assert.equal(TITLE_OVERRIDES[vidId(2)], a.before_title, 'original title live again');
+  assert.equal((await api(`/autopilot/actions/${a.id}/revert`, { method: 'POST' })).status, 409, 'cannot revert twice');
+  // A suggestion approved after the owner retitled the video must not overwrite their title.
+  const stale = await ok(`/autopilot/run/${vidId(5)}`, { method: 'POST', body: { force: true } });
+  assert.equal(stale.status, 'suggested', stale.message);
+  TITLE_OVERRIDES[vidId(5)] = 'Owner retitled this in Studio';
+  const m2 = calls.length;
+  const refused = await api(`/autopilot/actions/${stale.id}/approve`, { method: 'POST' });
+  assert.equal(refused.status, 409); assert.ok(/changed to "Owner retitled this in Studio"/.test(refused.json.error));
+  assert.ok(!calls.slice(m2).some(c => c.method === 'PUT'), 'nothing written');
+  assert.equal((await ok(`/autopilot/${OWNER}`)).actions.find(x => x.id === stale.id).status, 'skipped');
   await ok('/settings', { method: 'PUT', body: { autopilot_mode: 'auto' } });
 });
 
-test('no clear winner → left unchanged; Shorts and off-mode respected', async () => {
+test('an action left mid-write by a restart is settled against what YouTube shows', async () => {
+  const live = TITLE_OVERRIDES[vidId(5)];
+  const r = db.prepare("INSERT INTO autopilot_actions (channel_id, video_id, status, before_title, after_title, message) VALUES (?, ?, 'applying', 'old', ?, 'Applying…')").run(OWNER, vidId(5), live);
+  const r2 = db.prepare("INSERT INTO autopilot_actions (channel_id, video_id, status, before_title, after_title, message) VALUES (?, ?, 'applying', 'old', 'never reached YouTube', 'Applying…')").run(OWNER, vidId(7), );
+  await ok('/autopilot/evaluate', { method: 'POST' });
+  const acts = (await ok(`/autopilot/${OWNER}`)).actions;
+  assert.equal(acts.find(a => a.id === r.lastInsertRowid).status, 'applied');
+  assert.equal(acts.find(a => a.id === r2.lastInsertRowid).status, 'failed');
+});
+
+test('no clear winner → left unchanged; manual runs keep the guardrails; off-mode respected', async () => {
+  const short = await api(`/autopilot/run/${vidId(6)}`, { method: 'POST', body: { force: true } }); // index 6 is a Short in the mock
+  assert.equal(short.status, 409); assert.ok(/Shorts are excluded/.test(short.json.error));
   await ok('/settings', { method: 'PUT', body: { autopilot_min_gain: '99' } });
   const [a, twin] = await Promise.all([1, 2].map(() => ok(`/autopilot/run/${vidId(3)}`, { method: 'POST', body: { force: true } })));
   assert.equal(a.id, twin.id, 'concurrent runs on one video share one action');
