@@ -6,7 +6,7 @@
 import readline from 'node:readline';
 
 const BASE = (process.env.TUBEDESK_URL || 'http://localhost:4949').replace(/\/$/, '');
-const VERSION = '1.2.0';
+const VERSION = '1.3.0';
 
 async function call(method, path, body) {
   const res = await fetch(BASE + path, { method, headers: body ? { 'content-type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
@@ -46,9 +46,24 @@ const TOOLS = [
   { name: 'channel_videos', description: 'Local catalogue of a channel: views, views/day, outlier × vs the channel median, format.', inputSchema: { type: 'object', required: ['channelId'], properties: { channelId: { type: 'string' }, limit: { type: 'integer', default: 50 }, sort: { type: 'string' } } } },
   { name: 'keyword_research', description: 'Autocomplete tree, competition evidence and demand index (0–100, not search volume) for a query.', inputSchema: { type: 'object', required: ['q'], properties: { q: { type: 'string' }, country: { type: 'string', default: 'US' } } } },
   { name: 'outliers', description: 'Videos performing far above their own channel median for a topic (search.list, 100 units per uncached query).', inputSchema: { type: 'object', required: ['q'], properties: { q: { type: 'string' }, days: { type: 'integer', default: 90 }, maxSubs: { type: 'integer' }, format: { type: 'string', enum: ['all', 'long', 'short'] } } } },
+  { name: 'radar_score', description: 'Virality radar: score 1–8 title/thumbnail variants (plus optional opening hook) for a video idea BEFORE publishing. Returns each variant ranked with 8 axes (demand, proven-pattern fit, freshness, title craft, curiosity, emotion, thumbnail, hook), a 0–100 score, the predicted multiplier vs the channel\'s usual views with an 80% range, P(breakout ≥2×) and concrete fixes. Calibrated to the channel once radar_calibrate has run.',
+    inputSchema: { type: 'object', required: ['variants'], properties: {
+      channelId: { type: 'string', description: 'Owned channel id (defaults to the first owned channel)' },
+      variants: { type: 'array', items: { type: 'object', required: ['title'], properties: { title: { type: 'string' }, thumbnailUrl: { type: 'string' }, thumbnailPath: { type: 'string', description: 'Image inside TubeDesk data/thumbs (POST /api/packaging/thumbnail/upload)' } } } },
+      hook: { type: 'string', description: 'First ~30 seconds of the script' }, keyword: { type: 'string' }, format: { type: 'string', enum: ['long', 'short'], default: 'long' } } } },
+  { name: 'radar_watch', description: 'Live breakout watch: new uploads (yours and tracked competitors\') with views vs the channel\'s usual launch curve at the same age (velocity index), status (breakout/rising/on-track/lagging/stalled) and retention when available. run=true takes a fresh reading first (≈2 quota units per channel).',
+    inputSchema: { type: 'object', properties: { channelId: { type: 'string' }, run: { type: 'boolean', default: false } } } },
+  { name: 'radar_calibrate', description: 'Backtest the radar on the channel\'s own history (plus tracked competitors) and store calibrated weights. Reports holdout accuracy (Spearman, top-quartile hit rate vs base rate). AI features are cached, so reruns are cheap.',
+    inputSchema: { type: 'object', properties: { channelId: { type: 'string' }, aiLimit: { type: 'integer', default: 60 }, ai: { type: 'boolean', default: true } } } },
   { name: 'tubedesk_api', description: 'Call any TubeDesk REST endpoint (GET /api/... or POST /api/... with a JSON body). See GET /api/agent for the route list.',
     inputSchema: { type: 'object', required: ['path'], properties: { method: { type: 'string', enum: ['GET', 'POST', 'PUT', 'DELETE'], default: 'GET' }, path: { type: 'string', description: 'e.g. /api/channels' }, body: { type: 'object' } } } },
 ];
+
+async function firstOwned() {
+  const owned = await call('GET', '/api/channels?kind=owned');
+  if (!owned.length) throw new Error('No owned channel in TubeDesk yet — add one under Channels.');
+  return owned[0].id;
+}
 
 async function runTool(name, a = {}) {
   switch (name) {
@@ -67,6 +82,9 @@ async function runTool(name, a = {}) {
     case 'channel_videos': return call('GET', `/api/channels/${encodeURIComponent(a.channelId)}/videos${q({ limit: a.limit, sort: a.sort })}`);
     case 'keyword_research': { const [explore, demand] = await Promise.all([call('GET', `/api/keywords/explore${q({ q: a.q, country: a.country })}`), call('GET', `/api/keywords/demand${q({ q: a.q, country: a.country })}`)]); return { demand, explore }; }
     case 'outliers': return call('GET', `/api/outliers/search${q({ q: a.q, days: a.days, maxSubs: a.maxSubs, format: a.format })}`);
+    case 'radar_score': return call('POST', '/api/radar/score', { ...a, channelId: a.channelId || await firstOwned() });
+    case 'radar_watch': { const id = a.channelId || await firstOwned(); if (a.run) await call('POST', '/api/radar/watch/run'); return call('GET', `/api/radar/watch/${encodeURIComponent(id)}`); }
+    case 'radar_calibrate': { const id = a.channelId || await firstOwned(); return call('POST', `/api/radar/calibrate/${encodeURIComponent(id)}?wait=1&timeout=3600`, { aiLimit: a.aiLimit, ai: a.ai }); }
     case 'tubedesk_api': { const p = String(a.path || ''); if (!p.startsWith('/api/')) throw new Error('path must start with /api/'); return call(a.method || 'GET', p, a.body); }
     default: throw new Error(`unknown tool ${name}`);
   }
@@ -86,7 +104,7 @@ async function handle(line) {
   const reply = result => id !== undefined && out({ jsonrpc: '2.0', id, result });
   const fail = (code, message) => id !== undefined && out({ jsonrpc: '2.0', id, error: { code, message } });
   try {
-    if (method === 'initialize') return reply({ protocolVersion: params?.protocolVersion || '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'tubedesk', version: VERSION }, instructions: `TubeDesk at ${BASE}: render_video turns a JSON timeline into an MP4; publish_youtube / publish_instagram upload it. All file arguments are absolute paths on this machine. Read GET /api/agent (tubedesk_api) for the full route list.` });
+    if (method === 'initialize') return reply({ protocolVersion: params?.protocolVersion || '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'tubedesk', version: VERSION }, instructions: `TubeDesk at ${BASE}: render_video turns a JSON timeline into an MP4; publish_youtube / publish_instagram upload it. Before publishing, radar_score ranks title/thumbnail variants on the virality radar; after publishing, radar_watch shows whether the upload is beating its usual launch curve. All file arguments are absolute paths on this machine. Read GET /api/agent (tubedesk_api) for the full route list.` });
     if (method === 'notifications/initialized' || method === 'initialized') return;
     if (method === 'ping') return reply({});
     if (method === 'tools/list') return reply({ tools: TOOLS });

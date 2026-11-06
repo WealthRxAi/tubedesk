@@ -1,7 +1,7 @@
 {
   "name": "tubedesk",
-  "version": "1.2.0",
-  "description": "Self-hosted YouTube channel intelligence desk: analytics, keyword research, outliers, competitors, packaging, AI coaching and comment tools for channels you own.",
+  "version": "1.3.0",
+  "description": "Self-hosted YouTube channel intelligence desk: analytics, keyword research, outliers, competitors, packaging, a calibrated virality radar, AI coaching and comment tools for channels you own.",
   "type": "module",
   "private": true,
   "engines": { "node": ">=20" },

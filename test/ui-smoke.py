@@ -31,13 +31,21 @@ api(f'/analytics/{OWNER}/studio-import', 'POST', {'csv': 'Content,Video title,Im
 api(f'/boards/{OWNER}', 'POST', {'name': 'Inspo'})
 api(f'/blueprints/{OWNER}', 'POST', {'title': 'Idea one', 'titles': ['A title']})
 api(f'/competitors/{OWNER}/refresh', 'POST')
+# Virality radar: calibrate (no AI), take two watch readings, score an idea with the fake Claude CLI, then switch AI back off.
+api('/settings', 'PUT', {'radar_watch_days': '30', 'radar_watch_competitor_days': '30'})
+api(f'/radar/calibrate/{OWNER}?wait=1', 'POST', {'ai': False})
+api('/radar/watch/run', 'POST'); api('/radar/watch/run', 'POST')
+api('/settings', 'PUT', {'ai_provider': 'claude-cli', 'claude_cli_path': os.path.join(ROOT, 'test', 'fake-claude.mjs')})
+api('/radar/score', 'POST', {'channelId': OWNER, 'variants': [{'title': 'Nobody Warns You About Estate Recovery'}, {'title': 'Estate Recovery Explained'}], 'hook': 'Medicaid can take the house after your parent dies.'})
+api('/settings', 'PUT', {'ai_provider': 'none'})
 
 ROUTES = ['/', '/channels', '/library', '/analytics/overview', '/analytics/traffic', '/analytics/audience', '/analytics/subscribers', '/analytics/watch', '/analytics/content', '/analytics/slots', '/analytics/studio', '/analytics/revenue',
           '/keywords?q=medicaid', '/keywords?q=medicaid&mode=compete', '/outliers', '/outliers?mode=search&q=medicaid', '/trending', '/trending?tab=niche', '/trending?tab=patterns',
           '/competitors/compare', '/competitors/feed', '/competitors/alerts', '/competitors/cards', '/competitors/history', '/boards', '/boards?tab=blueprints', '/boards?tab=saved',
           '/packaging/title?title=7%20Medicaid%20Rules', '/packaging/description', '/packaging/chapters', '/packaging/thumbnail', '/packaging/translate', '/packaging/health', '/packaging/staged', '/packaging/safety',
           '/coach/chat', '/coach/ideas', '/coach/audit', '/coach/plan', '/coach/validate', '/coach/beginner', '/coach/lessons', '/coach/context',
-          '/production/script', '/production/transcript', '/production/clips', '/production/repurpose', '/production/hook', '/comments', '/comments?filter=questions', '/calculators', '/settings']
+          '/production/script', '/production/transcript', '/production/clips', '/production/repurpose', '/production/hook', '/comments', '/comments?filter=questions', '/calculators', '/settings',
+          '/radar/score', '/radar/watch', '/radar/calibration', '/radar/history', '/radar/method']
 errors = []
 os.makedirs(os.path.join(ROOT, 'test', 'screenshots'), exist_ok=True)
 with sync_playwright() as p:
@@ -66,6 +74,24 @@ with sync_playwright() as p:
     pg.goto(base + '/#/calculators'); pg.wait_for_timeout(400); pg.click('#calc'); pg.wait_for_timeout(300); assert 'Ad revenue' in pg.inner_text('#out')
     pg.goto(base + '/#/keywords?q=medicaid'); pg.wait_for_timeout(800); pg.click('#compete'); pg.wait_for_timeout(1200); assert 'Opportunity score' in pg.inner_text('#out')
     pg.goto(base + '/#/outliers'); pg.wait_for_timeout(600); pg.click('#go'); pg.wait_for_timeout(1500); print('OUTL:', pg.inner_text('#out')[:200]); assert 'outlier' in pg.inner_text('#out').lower()
+    # Virality radar interactions
+    api('/settings', 'PUT', {'ai_provider': 'claude-cli', 'claude_cli_path': os.path.join(ROOT, 'test', 'fake-claude.mjs')})
+    pg.goto(base + '/#/radar/score'); pg.wait_for_timeout(700)
+    pg.fill('#titles', 'The Medicaid Lookback Rule That Costs Families $80K\nMedicaid lookback explained\nWhy Nobody Warns You About the 5-Year Lookback')
+    pg.fill('#hook', 'If your mom gave you money in the last five years, Medicaid can deny her care. Here is the rule.')
+    pg.click('#go'); pg.wait_for_selector('.radar-card', timeout=20000); pg.wait_for_timeout(300)
+    out = pg.inner_text('#out'); assert 'Ranking' in out and 'Predicted' in out and 'Top pick' in out, out[:300]
+    assert 'undefined' not in out and 'NaN' not in out and '[object' not in out, out[:400]
+    pg.screenshot(path=os.path.join(ROOT, 'test', 'screenshots', 'radar_score_result.png'), full_page=True)
+    api('/settings', 'PUT', {'ai_provider': 'none'})
+    pg.goto(base + '/#/radar/watch'); pg.wait_for_timeout(700); pg.click('tr[data-curve]'); pg.wait_for_timeout(900)
+    assert 'Launch curve vs usual' in pg.inner_text('#drawer'); pg.screenshot(path=os.path.join(ROOT, 'test', 'screenshots', 'radar_watch_curve.png'), full_page=True)
+    pg.keyboard.press('Escape')
+    pg.goto(base + '/#/library'); pg.wait_for_timeout(800); pg.click('tr.clickable'); pg.wait_for_timeout(600); pg.click('#dr-tabs a[data-t=radar]'); pg.wait_for_timeout(900)
+    assert 'Radar score at publish' in pg.inner_text('#drawer'), pg.inner_text('#drawer')[:300]
+    pg.keyboard.press('Escape')
+    pg.goto(base + '/#/radar/calibration'); pg.wait_for_timeout(600); pg.click('#cal'); pg.wait_for_timeout(4000)
+    assert 'Rank accuracy' in pg.inner_text('#main')
     b.close()
 srv.kill(); mock.kill()
 if errors:

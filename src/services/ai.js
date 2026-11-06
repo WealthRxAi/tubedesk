@@ -19,7 +19,7 @@ function logAI({ feature, provider, promptChars, outputChars, ms, ok, error }) {
     .run(feature, provider, promptChars, outputChars || 0, ms, ok ? 1 : 0, error || null);
 }
 
-function runClaudeCli(prompt, { imagePath, timeoutMs = 240_000 } = {}) {
+function runClaudeCli(prompt, { imagePath, imagePaths = [], timeoutMs = 240_000 } = {}) {
   const bin = getSetting('claude_cli_path', 'claude');
   const model = getSetting('claude_cli_model', '');
   const args = ['-p', '--output-format', 'text'];
@@ -27,7 +27,9 @@ function runClaudeCli(prompt, { imagePath, timeoutMs = 240_000 } = {}) {
   // Permit Read so the CLI can open an image we pass by path; nothing else is granted.
   args.push('--allowedTools', 'Read');
   let fullPrompt = prompt;
-  if (imagePath) fullPrompt = `First read the image file at ${imagePath} (use the Read tool), then answer.\n\n` + prompt;
+  const images = imagePaths.length ? imagePaths : imagePath ? [imagePath] : [];
+  if (images.length === 1) fullPrompt = `First read the image file at ${images[0]} (use the Read tool), then answer.\n\n` + prompt;
+  else if (images.length > 1) fullPrompt = `First read each of these image files with the Read tool, in this order (they are referred to as image 1, image 2, …):\n${images.map((p, i) => `${i + 1}. ${p}`).join('\n')}\nThen answer.\n\n` + prompt;
   return new Promise((resolve, reject) => {
     const child = spawn(bin, args, { cwd: DATA_DIR, env: { ...process.env, CLAUDECODE: '' }, stdio: ['pipe', 'pipe', 'pipe'] });
     let out = '', err = '';
@@ -45,16 +47,18 @@ function runClaudeCli(prompt, { imagePath, timeoutMs = 240_000 } = {}) {
   });
 }
 
-async function runAnthropicApi(prompt, { imagePath, system } = {}) {
+async function runAnthropicApi(prompt, { imagePath, imagePaths = [], system } = {}) {
   const key = getSetting('anthropic_api_key');
   const model = getSetting('anthropic_model', 'claude-sonnet-4-5');
   const content = [];
-  if (imagePath) {
-    const data = fs.readFileSync(imagePath).toString('base64');
-    const ext = path.extname(imagePath).toLowerCase();
+  const images = imagePaths.length ? imagePaths : imagePath ? [imagePath] : [];
+  images.forEach((file, i) => {
+    const data = fs.readFileSync(file).toString('base64');
+    const ext = path.extname(file).toLowerCase();
     const mt = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg';
+    if (images.length > 1) content.push({ type: 'text', text: `Image ${i + 1}:` });
     content.push({ type: 'image', source: { type: 'base64', media_type: mt, data } });
-  }
+  });
   content.push({ type: 'text', text: prompt });
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -70,16 +74,16 @@ const SYSTEM = `You are TubeDesk's strategy engine for a YouTube creator who own
 Rules: never invent metrics; only use numbers given in the prompt. When uncertain say so. Be concrete and brief.
 Never reproduce other creators' titles, thumbnails or scripts verbatim — describe structures and patterns instead.`;
 
-/** ask(feature, prompt, {imagePath, json}) → string, or parsed JSON when json=true */
-export async function ask(feature, prompt, { imagePath = null, json = false } = {}) {
+/** ask(feature, prompt, {imagePath | imagePaths[], json}) → string, or parsed JSON when json=true */
+export async function ask(feature, prompt, { imagePath = null, imagePaths = [], json = false } = {}) {
   const provider = aiProvider();
   if (provider === 'none') throw new AIError('AI is disabled in Settings. Choose Claude CLI or an Anthropic API key.');
   const full = (json ? prompt + '\n\nRespond with valid JSON only — no prose, no code fences.' : prompt);
   const t0 = Date.now();
   try {
     const text = provider === 'anthropic-api'
-      ? await runAnthropicApi(full, { imagePath, system: SYSTEM })
-      : await runClaudeCli(SYSTEM + '\n\n' + full, { imagePath });
+      ? await runAnthropicApi(full, { imagePath, imagePaths, system: SYSTEM })
+      : await runClaudeCli(SYSTEM + '\n\n' + full, { imagePath, imagePaths });
     logAI({ feature, provider, promptChars: full.length, outputChars: text.length, ms: Date.now() - t0, ok: 1 });
     if (!json) return text;
     return parseJson(text);

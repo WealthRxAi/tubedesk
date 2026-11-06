@@ -169,3 +169,26 @@ hr{border:0;border-top:1px solid var(--line);margin:14px 0}
 @media(max-width:900px){.two{grid-template-columns:1fr}}
 
 .vlink{color:inherit}.vlink:hover{text-decoration:none}.vlink .t:hover{text-decoration:underline}
+
+/* virality radar */
+.radar-svg .ring{fill:none;stroke:var(--line);stroke-width:1}
+.radar-svg .spoke{stroke:var(--line);stroke-width:1}
+.radar-svg text{fill:var(--fg2);font-size:10.5px}
+.radar-svg text.na{fill:var(--fg3)}
+.radar-svg .shape{fill:rgba(232,80,58,.22);stroke:var(--accent);stroke-width:2}
+.radar-svg .shape.s1{fill:rgba(90,169,255,.18);stroke:var(--info)}
+.radar-svg .dot{fill:var(--accent)}.radar-svg .dot.s1{fill:var(--info)}
+.radar-wrap{display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin:10px 0}
+.radar-card.best{border-color:rgba(63,191,127,.55)}
+.radar-thumb{width:100%;max-width:320px;aspect-ratio:16/9;object-fit:cover;border-radius:8px;margin-top:6px;background:var(--bg3)}
+.axes-t td{padding:5px 6px;font-size:12.5px}
+.axes-t td:first-child{white-space:nowrap;color:var(--fg2)}
+.axv{display:inline-block;min-width:30px;text-align:center;border-radius:6px;padding:1px 6px;font-weight:700;font-variant-numeric:tabular-nums;background:var(--bg3)}
+.axv.good{color:var(--ok)}.axv.mid{color:var(--warn)}.axv.low{color:var(--bad)}
+b.big{font-size:20px;color:var(--fg)}
+.spark polyline{fill:none;stroke:var(--info);stroke-width:1.6}
+.chart .pt{fill:rgba(255,255,255,.35)}.chart .pt.own{fill:var(--accent)}
+.chart .base{stroke:var(--fg3);stroke-dasharray:4 3}
+.chart .axis-t{fill:var(--fg3)}
+.lg{display:inline-block;width:10px;height:10px;border-radius:2px;margin:0 4px 0 8px;vertical-align:-1px}
+.lg.a{background:var(--accent)}.lg.b{background:var(--info)}.lg.c{background:rgba(255,255,255,.35)}
