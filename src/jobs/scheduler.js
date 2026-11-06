@@ -4,6 +4,7 @@ import cron from 'node-cron';
 import { db, getSetting, today } from '../db.js';
 import { listChannels, refreshChannel, syncVideos } from '../services/channels.js';
 import { refreshAll, addAlert } from '../services/competitors.js';
+import { watchTick, calibrate, buildCorpus } from '../services/radar.js';
 
 let running = null;
 export function runDailySnapshot(opts = {}) {
@@ -45,5 +46,28 @@ export function startScheduler() {
   const last = getSetting('last_snapshot');
   const lastDay = last ? JSON.parse(last).day : null;
   if (lastDay !== today() && listChannels().length) setTimeout(() => runDailySnapshot().catch(() => {}), 20_000);
+  startRadar(tz);
   return task;
+}
+
+// Virality radar: hourly launch-curve watch of new uploads (≈2 quota units per channel per hour) and a weekly
+// recalibration per owned channel (AI features are cached, so only new videos cost an AI call).
+export function startRadar(tz) {
+  if (getSetting('radar_enabled', '1') !== '1') { console.log('[scheduler] radar disabled'); return; }
+  const watchExpr = getSetting('radar_watch_cron', '7 * * * *');
+  const calExpr = getSetting('radar_calibrate_cron', '40 6 * * 0');
+  if (cron.validate(watchExpr)) cron.schedule(watchExpr, () => watchTick({ log: console.log }).catch(e => console.error('[radar watch]', e.message)), { timezone: tz });
+  if (cron.validate(calExpr)) cron.schedule(calExpr, () => runWeeklyCalibration().catch(e => console.error('[radar calibrate]', e.message)), { timezone: tz });
+  console.log(`[scheduler] radar watch "${watchExpr}", calibration "${calExpr}" (${tz})`);
+  if (listChannels('owned').length) setTimeout(() => watchTick({ log: console.log }).catch(() => {}), 45_000);
+}
+export async function runWeeklyCalibration() {
+  const out = [];
+  for (const ch of listChannels('owned')) {
+    if (buildCorpus(ch.id).filter(r => r.y !== null).length < 12) { out.push({ channel: ch.title, skipped: 'not enough history' }); continue; }
+    try { const m = await calibrate(ch.id, { useAI: getSetting('radar_calibrate_ai', '1') === '1' }); out.push({ channel: ch.title, model: m.id, verdict: m.metrics?.holdout?.verdict }); }
+    catch (e) { out.push({ channel: ch.title, error: e.message }); }
+  }
+  console.log('[radar] weekly calibration', out);
+  return out;
 }

@@ -20,6 +20,7 @@ import * as estimate from '../services/estimate.js';
 import * as exp from '../services/export.js';
 import * as pub from '../services/publish.js';
 import * as ren from '../services/render.js';
+import * as radar from '../services/radar.js';
 import { runDailySnapshot } from '../jobs/scheduler.js';
 
 export const api = Router();
@@ -32,7 +33,7 @@ api.get('/status', w(async (req, res) => {
   res.json({
     configured: { apiKey: !!s.yt_api_key, oauth: !!(s.google_client_id && s.google_client_secret) },
     ai: await ai.status(), quota: quotaToday(), channels: ch.listChannels().length,
-    lastSnapshot: s.last_snapshot ? JSON.parse(s.last_snapshot) : null, version: '1.2.0', dataDir: DATA_DIR,
+    lastSnapshot: s.last_snapshot ? JSON.parse(s.last_snapshot) : null, version: '1.3.0', dataDir: DATA_DIR,
   });
 }));
 api.get('/settings', (req, res) => {
@@ -297,6 +298,26 @@ api.get('/scores/channel/:id', (req, res) => { const s = scores.channelScore(req
 api.get('/scores/channel/:id/videos', (req, res) => res.json(scores.videoScoresForChannel(req.params.id)));
 api.get('/keywords/demand', w(async (req, res) => res.json(await scores.demandIndex(req.query.q, { country: req.query.country || getSetting('default_country', 'US') }))));
 
+// ---------- virality radar: pre-publish score, calibration against your own history, live breakout watch ----------
+api.get('/radar/axes', (req, res) => res.json(radar.axesInfo()));
+api.post('/radar/score', w(async (req, res) => res.json(await radar.scoreIdea(req.body || {}))));
+api.get('/radar/video/:id', (req, res) => { const r = radar.scoreExisting(req.params.id); r ? res.json(r) : res.status(404).json({ error: 'video not synced' }); });
+api.get('/radar/model/:channel', (req, res) => res.json({ current: radar.currentModel(req.params.channel), history: radar.listModels(req.params.channel) }));
+api.post('/radar/calibrate/:channel', w(async (req, res) => {
+  if (!ch.getChannel(req.params.channel)) return res.status(404).json({ error: 'unknown channel' });
+  const b = req.body || {};
+  let job = radar.startCalibration(req.params.channel, { useAI: b.ai !== false, ...(b.aiLimit !== undefined ? { aiLimit: Number(b.aiLimit) } : {}), ...(b.minAgeDays !== undefined ? { minAgeDays: Number(b.minAgeDays) } : {}) });
+  if (req.query.wait === '1' || b.wait === true) job = await radar.waitJob(job.id, Number(req.query.timeout || 1800) * 1000);
+  else job = radar.getJob(job.id);
+  res.status(job.status === 'failed' ? 400 : 200).json(job);
+}));
+api.get('/radar/jobs/:id', w(async (req, res) => { const j = req.query.wait === '1' ? await radar.waitJob(req.params.id, Number(req.query.timeout || 600) * 1000) : radar.getJob(req.params.id); j ? res.json(j) : res.status(404).json({ error: 'job not found (jobs live in memory until restart; models persist)' }); }));
+api.get('/radar/watch/:channel', (req, res) => res.json(radar.watchBoard(req.params.channel, { includeInactive: req.query.all !== '0' })));
+api.post('/radar/watch/run', w(async (req, res) => res.json(await radar.watchTick())));
+api.get('/radar/curve/:video', (req, res) => { const c = radar.watchCurve(req.params.video); c ? res.json(c) : res.status(404).json({ error: 'video is not on the radar watch' }); });
+api.get('/radar/history/:channel', (req, res) => res.json(radar.history(req.params.channel, { limit: Number(req.query.limit || 100) })));
+api.post('/radar/scores/:id/link', (req, res) => res.json({ updated: radar.linkScore(req.params.id, req.body?.videoId || null) }));
+
 // ---------- browser extension ----------
 // Watch page: public stats for any video + outlier context from a cheap sample of that channel's recent uploads (≤ 3 units when uncached).
 // Recent uploads of a channel (≤50, 1 quota unit for the playlist page + 1 for stats; cached 6h).
@@ -504,6 +525,15 @@ RENDER A VIDEO FROM A JSON TIMELINE (ffmpeg)
   Inspect: POST /api/media/probe {"file"} · /api/media/segments {"file"} · /api/media/captions {"file","script":[…]} · /api/media/frame {"file","at":12.5}
   Then publish the output with /api/publish/youtube or /api/publish/instagram.
 
+VIRALITY RADAR (score before you publish; watch after)
+  POST /api/radar/score
+  {"channelId":"UC…","variants":[{"title":"A"},{"title":"B","thumbnailPath":"/abs/in/data/thumbs/b.jpg"}],"hook":"first 30s of script","keyword":"topic","format":"long"}
+  → variants ranked by score (0–100) with 8 axes, predicted multiplier vs the channel's local baseline, 80% range, P(≥2×), fixes.
+  POST /api/radar/calibrate/:channelId?wait=1   backtest on the channel's history → calibrated weights + holdout accuracy
+  POST /api/radar/watch/run                     hourly launch-curve check of new uploads (runs on its own every hour)
+  GET  /api/radar/watch/:channelId              velocity index vs the usual launch curve, status, alerts
+  GET  /api/radar/history/:channelId            scored ideas vs how they actually did
+
 CHECK LATER
   GET /api/publish/jobs/:id        GET /api/render/jobs/:id        GET /api/publish/jobs        GET /api/publish/status
 
@@ -515,6 +545,7 @@ OTHER USEFUL READS
   GET /api/outliers/search?q=…&days=90           videos far above their channel median
   GET /api/export/audit/:channelId               full read-only audit JSON
   GET /api/publish/schema                        this contract as JSON
+  GET /api/radar/axes                            what each radar axis measures and how the score is built
 
-MCP (Claude Code, Cursor, any MCP client): node mcp/server.js  — tools: render_video, media_transcode, media_probe, speech_segments, caption_timing, extract_frame, render_job, publish_youtube, publish_instagram, publish_job, publish_status, list_channels, channel_videos, keyword_research, outliers, tubedesk_api (any GET/POST).
+MCP (Claude Code, Cursor, any MCP client): node mcp/server.js  — tools: render_video, media_transcode, media_probe, speech_segments, caption_timing, extract_frame, render_job, publish_youtube, publish_instagram, publish_job, publish_status, list_channels, channel_videos, keyword_research, outliers, radar_score, radar_watch, radar_calibrate, tubedesk_api (any GET/POST).
 `;

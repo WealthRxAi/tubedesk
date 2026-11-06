@@ -15,6 +15,10 @@ A self-hosted YouTube channel desk for the channels you own: analytics, keyword 
   <img src="docs/screenshots/competitors.jpg" width="32%" alt="Competitor comparison">
   <img src="docs/screenshots/packaging.jpg" width="32%" alt="Title lab and AI title generator">
 </p>
+<p align="center">
+  <img src="docs/screenshots/radar.jpg" width="49%" alt="Virality radar: title/thumbnail variants ranked on 8 axes with a calibrated prediction">
+  <img src="docs/screenshots/radar-watch.jpg" width="49%" alt="Live watch: each new upload's pace vs the channel's usual launch curve">
+</p>
 
 ## What it does
 
@@ -27,6 +31,7 @@ A self-hosted YouTube channel desk for the channels you own: analytics, keyword 
 | **Outliers** | Library outliers across own + competitor channels (views ÷ channel median, per format), search-driven breakout finder (views ÷ subscribers, velocity), similar videos | Local data, Data API |
 | **Trending & niches** | mostPopular chart by region/category, niche channel finder sized by views-per-video, title structure analysis (patterns, never copied titles) | Data API |
 | **Competitors** | Watchlist, side-by-side comparison, upload feed, daily snapshots → growth, alerts (new uploads, 3× breakouts, title/thumbnail changes), report cards, 90-day scenario projections, packaging history | Data API + scheduler |
+| **Virality radar** | Score 1–8 title/thumbnail variants (plus the opening hook) before publishing on 8 axes — topic demand, proven-pattern fit, freshness, title craft, curiosity, emotion, thumbnail, hook — with a predicted multiplier vs your usual views, an 80% range and P(breakout); **calibrated on your own history** with a time-ordered holdout that grades itself; hourly **live watch** of new uploads (yours and competitors') against your usual launch curve with breakout/lagging alerts; prediction-vs-outcome history | Local data, suggest, AI, Data API |
 | **Packaging** | Title analyzer (named heuristics, no CTR claims), AI title generator, description checker/drafter, tag helper (500-char limit enforced), chapter validator, thumbnail preview in YouTube layouts incl. 160px test, AI thumbnail critique, Test & Compare planner, metadata translation, channel health report, staged-edit review, safety preflight | Local + AI |
 | **AI coach** | Quick / deep / max modes grounded in a factual context built from your data, daily ideas, idea generator, channel audit, weekly plan, idea validation, beginner next steps, lessons | Claude Code CLI |
 | **Production** | Script writer with [CITE] markers, caption download for owned videos, chapters from transcript, clip-moment finder for Shorts, repurposing (blog/LinkedIn/Threads/newsletter), hook advisor, script rubric | Data API + AI |
@@ -35,7 +40,7 @@ A self-hosted YouTube channel desk for the channels you own: analytics, keyword 
 | **Browser extension** | On youtube.com: stats panel under every video (views, views/hour or /day, **estimated video revenue**, outlier × vs that channel's median, velocity, likes/comments rates, views ÷ subs, SEO score, length, publish time, tags + copy), a channel card with **estimated monthly/yearly revenue**, uploads/week, median views and recent breakouts; a full channel panel on any channel page with its recent uploads ranked by outlier ×; **chips on every thumbnail** across home, search, related and channel grids (views, views/day, × vs channel average, est. revenue); one-click track-as-competitor and save-to-board; demand panel on search results; popup with your channels' today numbers and alerts | Local TubeDesk server |
 | **System** | Quota meter and history, response cache, daily scheduler, earnings and valuation scenario calculators | — |
 
-Everything that is an estimate or heuristic is labeled as such in the UI. Nothing asserts proprietary scores, predicted CTR, or third-party revenue figures.
+Everything that is an estimate or heuristic is labeled as such in the UI. Nothing asserts proprietary scores, predicted CTR, or third-party revenue figures. The one prediction TubeDesk makes — the radar's views multiplier — is fitted on your own channel's history, shown as a range, and graded on newer videos the model never saw.
 
 ## Requirements
 
@@ -86,6 +91,36 @@ Logs: `~/Library/Logs/tubedesk.log`. Remove with `launchctl unload ~/Library/Lau
 
 No Google API exposes impressions or click-through rate. YouTube Studio → Analytics → Advanced mode → Content → add the Impressions / CTR / Average view duration columns → Export → CSV, then drop the file on Analytics → *Impressions & CTR*.
 
+## Virality radar
+
+Rate a video package before you publish, learn what actually moves views on *your* channel, and catch breakouts while they are still rising. **Create → Virality radar** in the app, `/api/radar/*` for agents, or the `radar_score` / `radar_watch` / `radar_calibrate` MCP tools.
+
+**1. Score an idea.** Paste up to 8 title variants, optionally thumbnails (one image tested with every title, several images with one title for a thumbnail A/B, or paired) and the first ~30 seconds of the script. Each package gets 8 axes, 0–100:
+
+| Axis | How it is measured | Backtested |
+|---|---|---|
+| Topic demand | Demand Index from free autocomplete signals | no — autocomplete today reflects demand old videos may have created |
+| Proven-pattern fit | how videos with overlapping topics and the same format did vs their own channel baseline (your library + tracked competitors) | yes, using only videos published earlier |
+| Freshness | title overlap with uploads from you and competitors in the last 90 days; repeating your own recent video caps it at 25 | yes |
+| Title craft | the Packaging title checklist | yes |
+| Curiosity, Emotion | AI rating of title + thumbnail together | yes |
+| Thumbnail | AI vision rating (focal point, 160 px legibility, contrast, complements the title) | yes (current thumbnail) |
+| Hook | AI rating of the opening | no — old transcripts cost 200 quota units each |
+
+The composite is a weighted mean of the axes that could be scored. It maps to **predicted views ÷ your usual views** (the median of your 10 nearest-in-time same-format uploads), with an 80% range and P(≥ 2×). Every weak axis comes with a concrete fix. Scored ideas are saved and linked automatically to the upload with the matching title, so **History** shows prediction vs outcome.
+
+**2. Calibrate.** Backtests the radar on your synced library plus tracked competitors: each video's outcome is its views ÷ its local baseline (so channel growth isn't counted as success). Weights blend each axis's correlation with outcomes and its prior, trusting data more as the sample grows; a time-ordered holdout (fit on the oldest 70%, test on the newest 30%) reports Spearman rank accuracy, top-quartile hit rate vs base rate, and breakouts caught, and labels the model *useful*, *weak* or *not predictive yet*. If the score doesn't predict views on your history, the radar says so and stops pretending (every package gets your baseline). AI ratings are cached per video, so re-runs only pay for new uploads. It re-calibrates itself weekly (Sunday 06:40).
+
+**3. Live watch.** Every hour (≈ 2 quota units per channel) it re-reads views of uploads younger than 7 days (competitors: 3 days) and compares them with your usual views at the same age — from hourly launch curves of earlier uploads once enough exist, otherwise daily snapshots, otherwise a labelled estimate. ≥ 2× pace raises a breakout alert (pin a comment, cut Shorts, script a follow-up while it's hot); ≤ 0.6× after 24 h raises a lagging alert (swap title/thumbnail — the fastest lever early). Competitor breakouts are flagged as response-video opportunities. For Google-connected channels, retention vs your channel average is added after 48 h.
+
+```bash
+curl -X POST localhost:4949/api/radar/score -H 'content-type: application/json' -d '{"channelId":"UC…","variants":[{"title":"A"},{"title":"B"}],"hook":"first 30s","format":"long"}'
+curl -X POST 'localhost:4949/api/radar/calibrate/UC…?wait=1'
+curl localhost:4949/api/radar/watch/UC…
+```
+
+Settings keys: `radar_enabled`, `radar_watch_cron` (`7 * * * *`), `radar_calibrate_cron` (`40 6 * * 0`), `radar_calibrate_ai`, `radar_ai_limit` (60), `radar_min_age_days` (14), `radar_watch_days` (7), `radar_watch_competitor_days` (3), `radar_watch_competitors` (1), `radar_breakout_x` (2), `radar_curve_exponent` (0.6).
+
 ## Publishing (YouTube + Instagram) — built for AI agents
 
 TubeDesk can post for you, so any model that can call HTTP or run a command on your machine (Claude Code, Cursor, Codex, ChatGPT, Gemini, Grok, a cron script) can publish without browser automation:
@@ -108,7 +143,7 @@ Jobs: `GET /api/publish/jobs`, `GET /api/publish/jobs/:id?wait=1`, readiness: `G
 claude mcp add tubedesk -- node /path/to/tubedesk/mcp/server.js
 ```
 
-No dependencies; it proxies the local TubeDesk server. Tools: `render_video`, `media_transcode`, `media_probe`, `speech_segments`, `caption_timing`, `extract_frame`, `render_job`, `publish_youtube`, `publish_instagram`, `publish_job`, `publish_status`, `list_channels`, `channel_videos`, `keyword_research`, `outliers`, `tubedesk_api`.
+No dependencies; it proxies the local TubeDesk server. Tools: `render_video`, `media_transcode`, `media_probe`, `speech_segments`, `caption_timing`, `extract_frame`, `render_job`, `publish_youtube`, `publish_instagram`, `publish_job`, `publish_status`, `list_channels`, `channel_videos`, `keyword_research`, `outliers`, `radar_score`, `radar_watch`, `radar_calibrate`, `tubedesk_api`.
 
 ## Media pipeline (ffmpeg): render from a JSON timeline
 
@@ -135,6 +170,7 @@ Helpers: `POST /api/media/transcode {file, preset: short|youtube|square|contain}
 | search.list | 100 | keyword competition, search outliers, niche explorer, similar videos |
 | videos.update, comments.insert, playlists.insert, thumbnails.set | 50 | applying staged edits, replies, playlists |
 | captions.list + download | 50 + 200 | transcripts of your own videos |
+| playlistItems + videos list (radar watch) | ~2 per channel per hour | live breakout watch (~50/day per channel) |
 
 A full sync of a 500-video channel costs ~20 units. search.list results are cached for 24 hours. The quota guard refuses calls that would cross the daily limit (minus a reserve) instead of failing mid-way.
 
@@ -150,9 +186,9 @@ src/db.js                SQLite schema (channels, videos, snapshots, metadata_hi
 src/youtube/client.js    Data API wrapper: caching, quota ledger, suggest endpoint
 src/youtube/oauth.js     Google OAuth, per-channel token storage and refresh
 src/youtube/analytics.js Analytics API v2 queries
-src/services/*.js        channels, analytics, discovery, competitors, packaging, comments, coach, misc, ai
+src/services/*.js        channels, analytics, discovery, competitors, packaging, comments, coach, misc, ai, radar (virality radar)
 src/routes/api.js        REST API (/api/…) + /oauth/callback
-src/jobs/scheduler.js    daily snapshot + competitor refresh (node-cron)
+src/jobs/scheduler.js    daily snapshot + competitor refresh, hourly radar watch, weekly radar calibration (node-cron)
 public/                  single-page UI, no build step, no framework
 extension/               Chrome/Brave/Edge extension (Manifest V3) that overlays TubeDesk data on youtube.com
 test/                    unit + integration tests, mock YouTube API, headless UI smoke test

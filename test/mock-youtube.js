@@ -16,12 +16,16 @@ function vid(chId, i) {
   return { id, channelId: chId, title: titles[i % titles.length] + (i >= titles.length ? ` (part ${Math.floor(i / titles.length) + 1})` : ''), short, views, likes: Math.round(views * 0.04), comments: Math.round(views * 0.004), pub, duration: short ? 'PT48S' : `PT${8 + (i % 6)}M${12 + i}S` };
 }
 function videoResource(v) {
-  return { id: v.id, snippet: { publishedAt: v.pub, channelId: v.channelId, channelTitle: CH[v.channelId].title, title: v.title, description: `About ${v.title}.\n\n0:00 Intro\n1:10 The rule\n4:00 Example\n\nhttps://example.org/source`, tags: ['medicaid', 'aging parents', 'caregiving'], categoryId: '27', defaultLanguage: 'en', liveBroadcastContent: 'none', thumbnails: { high: { url: `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg` }, maxres: { url: `https://i.ytimg.com/vi/${v.id}/maxresdefault.jpg` } } }, statistics: { viewCount: String(v.views), likeCount: String(v.likes), commentCount: String(v.comments) }, contentDetails: { duration: v.duration }, status: { privacyStatus: 'public', selfDeclaredMadeForKids: false } };
+  return { id: v.id, snippet: { publishedAt: v.pub, channelId: v.channelId, channelTitle: CH[v.channelId].title, title: v.title, description: `About ${v.title}.\n\n0:00 Intro\n1:10 The rule\n4:00 Example\n\nhttps://example.org/source`, tags: ['medicaid', 'aging parents', 'caregiving'], categoryId: '27', defaultLanguage: 'en', liveBroadcastContent: 'none', thumbnails: { high: { url: `${THUMB_BASE}/vi/${v.id}/hqdefault.jpg` }, maxres: { url: `${THUMB_BASE}/vi/${v.id}/maxresdefault.jpg` } } }, statistics: { viewCount: String(v.views), likeCount: String(v.likes), commentCount: String(v.comments) }, contentDetails: { duration: v.duration }, status: { privacyStatus: 'public', selfDeclaredMadeForKids: false } };
 }
 function channelResource(c) {
   return { id: c.id, snippet: { title: c.title, customUrl: c.handle, description: `${c.title} — money and legal help for families caring for aging parents.`, country: c.country, publishedAt: '2025-06-01T00:00:00Z', thumbnails: { high: { url: `https://yt3.ggpht.com/${c.id}=s240` } } }, statistics: { subscriberCount: String(c.subs), viewCount: String(c.views), videoCount: String(c.videos) }, contentDetails: { relatedPlaylists: { uploads: 'UU' + c.id.slice(2) } }, brandingSettings: { channel: { country: c.country } } };
 }
 export const calls = [];
+// Video thumbnails are served by the mock itself so tests never touch the network.
+let THUMB_BASE = 'https://i.ytimg.com';
+// 1×1 white JPEG
+const JPEG = Buffer.from('/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkICQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/yQALCAABAAEBAREA/8wABgAQEAX/2gAIAQEAAD8A0s8g/9k=', 'base64');
 
 export function startMock(port = 0) {
   const server = http.createServer((req, res) => {
@@ -29,6 +33,7 @@ export function startMock(port = 0) {
     const q = Object.fromEntries(u.searchParams);
     calls.push({ path: u.pathname, q, method: req.method, auth: req.headers.authorization || null });
     const json = (o, code = 200) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(o)); };
+    if (u.pathname.startsWith('/vi/')) { res.writeHead(200, { 'content-type': 'image/jpeg' }); return res.end(JPEG); }
     // --- publishing mocks: YouTube resumable upload + thumbnails, Instagram Graph API ---
     if (u.pathname.endsWith('/upload/videos') || u.pathname.endsWith('/upload/videos/session')) {
       if (u.pathname.endsWith('/session')) { let n = 0; req.on('data', d => n += d.length); return req.on('end', () => { calls.at(-1).bytes = n; json({ id: 'NEWVID00001', status: { uploadStatus: 'uploaded', privacyStatus: 'private' } }); }); }
@@ -105,7 +110,7 @@ export function startMock(port = 0) {
     if (u.pathname.endsWith('/token')) return json({ access_token: 'tok', expires_in: 3600 });
     json({ error: { message: 'mock: unknown ' + u.pathname, errors: [{ reason: 'notFound' }] } }, 404);
   });
-  return new Promise(resolve => server.listen(port, '127.0.0.1', () => resolve({ server, port: server.address().port })));
+  return new Promise(resolve => server.listen(port, '127.0.0.1', () => { THUMB_BASE = `http://127.0.0.1:${server.address().port}`; resolve({ server, port: server.address().port }); }));
 }
 
 if (process.argv[1] && process.argv[1].endsWith('mock-youtube.js')) startMock(Number(process.env.MOCK_PORT || 4999)).then(({ port }) => console.log('mock youtube on', port));

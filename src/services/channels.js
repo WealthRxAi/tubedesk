@@ -208,10 +208,10 @@ export function getVideo(id) {
   return r ? hydrateVideo(r) : null;
 }
 
-export async function fetchVideosByIds(ids) {
+export async function fetchVideosByIds(ids, { fresh = false } = {}) {
   const out = [];
   for (const group of chunk(ids, 50)) {
-    const res = await ytGet('videos.list', { part: 'snippet,statistics,contentDetails', id: group.join(','), maxResults: 50 }, { ttl: DEFAULT_TTL.videoStats });
+    const res = await ytGet('videos.list', { part: 'snippet,statistics,contentDetails', id: group.join(','), maxResults: 50 }, fresh ? { ttl: 0, noCache: true } : { ttl: DEFAULT_TTL.videoStats });
     for (const v of res.items || []) {
       const dur = parseDuration(v.contentDetails?.duration);
       out.push({
@@ -219,6 +219,7 @@ export async function fetchVideosByIds(ids) {
         tags: v.snippet?.tags || [], published_at: v.snippet?.publishedAt, duration_sec: dur, is_short: isShort(dur, v.snippet?.title, v.snippet?.description),
         thumbnail: bestThumb(v.snippet?.thumbnails), view_count: Number(v.statistics?.viewCount || 0), like_count: Number(v.statistics?.likeCount || 0),
         comment_count: Number(v.statistics?.commentCount || 0), category_id: v.snippet?.categoryId,
+        is_live: !!(v.snippet?.liveBroadcastContent && v.snippet.liveBroadcastContent !== 'none'),
       });
     }
   }

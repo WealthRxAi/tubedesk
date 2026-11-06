@@ -205,7 +205,7 @@ export async function downloadImage(url) {
   const name = Buffer.from(url).toString('base64url').slice(0, 80) + (url.includes('.png') ? '.png' : '.jpg');
   const file = path.join(dir, name);
   if (fs.existsSync(file)) return file;
-  const res = await fetch(url);
+  const res = await fetch(url, { signal: AbortSignal.timeout(20_000) });
   if (!res.ok) throw new Error(`Could not fetch image (${res.status})`);
   fs.writeFileSync(file, Buffer.from(await res.arrayBuffer()));
   return file;
