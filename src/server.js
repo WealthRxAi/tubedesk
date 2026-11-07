@@ -4,7 +4,8 @@ import { fileURLToPath } from 'node:url';
 import { getSetting, DATA_DIR } from './db.js';
 import { api, oauthCallback } from './routes/api.js';
 import { startScheduler } from './jobs/scheduler.js';
-import { servePublic } from './services/publish.js';
+import { servePublic, recoverJobs } from './services/publish.js';
+import { recoverAfterRestart } from './services/clips.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -46,11 +47,14 @@ app.use((req, res, next) => {
 app.use('/api', api);
 app.use(oauthCallback());
 app.use('/data/thumbs', express.static(path.join(DATA_DIR, 'thumbs')));
+app.use('/data/clips', express.static(path.join(DATA_DIR, 'clips')));
 app.use(express.static(path.join(__dirname, '..', 'public'), { extensions: ['html'] }));
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'index.html')));
 
 const PORT = Number(process.env.PORT || getSetting('port', 4949));
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`TubeDesk running at http://localhost:${PORT}`);
+  // Uploads a previous run left half-done are settled or marked failed — never re-sent automatically.
+  try { recoverJobs(); recoverAfterRestart(); } catch (e) { console.error('restart recovery:', e.message); }
   if (process.env.TUBEDESK_NO_SCHEDULER !== '1') startScheduler();
 });

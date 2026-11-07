@@ -126,8 +126,8 @@ export const AXES = {
     desc: 'AI rating: strength of a felt reaction (surprise, fear, awe, anger, amusement, relief) or high personal stakes for the audience.' },
   thumbnail: { label: 'Thumbnail', source: 'ai-vision', prior: 0.12, backtest: true,
     desc: 'AI vision rating: one focal point, legible at 160 px, strong contrast, complements rather than repeats the title.' },
-  hook: { label: 'Opening hook', source: 'ai', prior: 0.08, backtest: false,
-    desc: 'AI rating of the first ~30 seconds of script: promise restated immediately, stakes, no throat-clearing. Not backtestable (old transcripts cost 200 quota units each), so it keeps its prior weight.' },
+  hook: { label: 'Opening hook', source: 'ai', prior: 0.08, backtest: true,
+    desc: 'AI rating of the first ~30 seconds: promise restated immediately, stakes, no throat-clearing. Backtested on your past uploads from local whisper transcripts of their source files (or, within a small daily quota budget, their YouTube captions).' },
 };
 const AXIS_KEYS = Object.keys(AXES);
 export const DEFAULT_MAP = { alpha: 0, beta: 1.5, sigma: 1.1, n: 0 };
@@ -320,12 +320,46 @@ function channelContextLine(channelId) {
   return ch ? `${ch.title} — ${(ch.description || '').replace(/\s+/g, ' ').slice(0, 240)}` : '';
 }
 
-function loadFeatures(ids) {
+function loadFeatures(ids, version = FEATURE_VERSION) {
   if (!ids.length) return {};
   const out = {};
   const stmt = db.prepare('SELECT * FROM radar_features WHERE video_id = ? AND version = ?');
-  for (const id of ids) { const r = stmt.get(id, FEATURE_VERSION); if (r) out[id] = { ...JSON.parse(r.axes_json), why: r.why, fix: r.fix }; }
+  for (const id of ids) { const r = stmt.get(id, version); if (r) out[id] = { ...JSON.parse(r.axes_json), why: r.why, fix: r.fix }; }
   return out;
+}
+const HOOK_VERSION = 'hook-v1';
+
+/** Rate the opening ~30 s of past uploads (from transcripts) and cache them. */
+export async function featurizeHooks(videos, { context = '', captionBudget = 0, onProgress = () => {} } = {}) {
+  const { transcriptFor, hookText, cached } = await import('./transcribe.js');
+  const have = loadFeatures(videos.map(v => v.id), HOOK_VERSION);
+  const items = [], errors = [];
+  let captionsUsed = 0, transcribed = 0;
+  for (const v of videos) {
+    if (have[v.id]) continue;
+    const before = cached(v.id);
+    let t = null;
+    try { t = await transcriptFor(v.id, { allowCaptions: captionsUsed < captionBudget }); }
+    catch (e) { errors.push(`${v.id}: ${e.message}`); continue; }
+    if (t && !before) { if (t.source === 'captions') captionsUsed++; else transcribed++; }
+    const hook = t ? hookText(t) : '';
+    if (hook) items.push({ key: v.id, title: v.title, image: null, hook });
+    onProgress({ done: items.length, total: videos.length });
+  }
+  let rated = 0;
+  for (let i = 0; i < items.length; i += 8) {
+    try {
+      const r = await aiAxes(items.slice(i, i + 8), { context });
+      for (const it of items.slice(i, i + 8)) {
+        if (!Number.isFinite(r[it.key]?.hook)) continue;
+        db.prepare(`INSERT INTO radar_features (video_id, version, axes_json, why, fix) VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT(video_id, version) DO UPDATE SET axes_json = excluded.axes_json, why = excluded.why, fix = excluded.fix, created_at = datetime('now')`)
+          .run(it.key, HOOK_VERSION, JSON.stringify({ hook: r[it.key].hook }), r[it.key].why, r[it.key].fix);
+        rated++;
+      }
+    } catch (e) { errors.push(e.message); break; }
+  }
+  return { cached: Object.keys(have).length, rated, transcribed, captionsUsed, withoutTranscript: videos.length - Object.keys(have).length - items.length, errors: errors.slice(0, 5) };
 }
 function saveFeature(id, f) {
   db.prepare(`INSERT INTO radar_features (video_id, version, axes_json, why, fix) VALUES (?, ?, ?, ?, ?)
@@ -469,7 +503,7 @@ export function listModels(channelId, limit = 10) {
 }
 
 /** Backtest the radar on the channel's history (+ tracked competitors) and store a calibrated model. */
-export async function calibrate(channelId, { aiLimit = Number(getSetting('radar_ai_limit', 60)), minAgeDays = Number(getSetting('radar_min_age_days', 14)), useAI = true, onProgress = () => {} } = {}) {
+export async function calibrate(channelId, { aiLimit = Number(getSetting('radar_ai_limit', 60)), minAgeDays = Number(getSetting('radar_min_age_days', 14)), useAI = true, hookCaptions = Number(getSetting('radar_hook_captions', 10)), onProgress = () => {} } = {}) {
   const ch = getChannel(channelId);
   if (!ch) throw Object.assign(new Error('Unknown channel'), { status: 404 });
   const corpus = buildCorpus(channelId, { minAgeDays });
@@ -493,10 +527,20 @@ export async function calibrate(channelId, { aiLimit = Number(getSetting('radar_
     const r = await featurizeVideos(pool, { context: channelContextLine(channelId), onProgress: p => onProgress({ stage: 'ai', ...p }) });
     aiReport = { used: true, requested: pool.length, ...r };
   }
+  let hookReport = { used: false, reason: aiReport.reason };
+  if (useAI && aiAvailable() && aiLimit > 0) {
+    const ownPool = labelled.filter(r => r.own).sort((a, b) => b.ts - a.ts).slice(0, aiLimit);
+    onProgress({ stage: 'hooks', done: 0, total: ownPool.length });
+    hookReport = { used: true, ...(await featurizeHooks(ownPool, { context: channelContextLine(channelId), captionBudget: hookCaptions, onProgress: p => onProgress({ stage: 'hooks', ...p }) })) };
+  }
   const feats = loadFeatures(rows.map(r => r.id));
-  for (const r of rows) { const f = feats[r.id]; if (f) { r.axes.curiosity = f.curiosity; r.axes.emotion = f.emotion; r.axes.thumbnail = f.thumbnail; } }
+  const hooks = loadFeatures(rows.map(r => r.id), HOOK_VERSION);
+  for (const r of rows) {
+    const f = feats[r.id]; if (f) { r.axes.curiosity = f.curiosity; r.axes.emotion = f.emotion; r.axes.thumbnail = f.thumbnail; }
+    if (Number.isFinite(hooks[r.id]?.hook)) r.axes.hook = hooks[r.id].hook;
+  }
   onProgress({ stage: 'fit', done: 0, total: 1 });
-  const metrics = { holdout: holdout(rows), sample: { labelled: rows.length, own: ownLabelled, competitors: rows.length - ownLabelled, withAI: rows.filter(r => Number.isFinite(r.axes.curiosity)).length }, ai: aiReport, minAgeDays };
+  const metrics = { holdout: holdout(rows), sample: { labelled: rows.length, own: ownLabelled, competitors: rows.length - ownLabelled, withAI: rows.filter(r => Number.isFinite(r.axes.curiosity)).length, withHook: rows.filter(r => Number.isFinite(r.axes.hook)).length }, ai: aiReport, hooks: hookReport, minAgeDays };
   const model = fitModel(rows);
   metrics.noSignal = model.noSignal;
   metrics.points = rows.map(r => ({ id: r.id, score: round(composite(r.axes, model.weights).score, 1), actualX: round(2 ** r.y, 3), own: r.own })).filter(p => p.score !== null);
@@ -631,7 +675,8 @@ export function scoreExisting(videoId) {
   const pf = patternFitAxis(tok, formatLabel(v.title), corpus, { beforeTs: ts, isShort: !!v.is_short });
   const fr = freshnessAxis(tok, corpus, { atTs: ts, selfChannelId: v.channel_id });
   const f = loadFeatures([videoId])[videoId] || {};
-  const axes = { demand: null, patternFit: pf?.value ?? null, freshness: fr?.value ?? null, titleCraft: analyzeTitle(v.title).score, curiosity: f.curiosity ?? null, emotion: f.emotion ?? null, thumbnail: f.thumbnail ?? null, hook: null };
+  const hf = loadFeatures([videoId], HOOK_VERSION)[videoId] || {};
+  const axes = { demand: null, patternFit: pf?.value ?? null, freshness: fr?.value ?? null, titleCraft: analyzeTitle(v.title).score, curiosity: f.curiosity ?? null, emotion: f.emotion ?? null, thumbnail: f.thumbnail ?? null, hook: hf.hook ?? null };
   const model = currentModel(owned);
   const comp = composite(axes, model.weights);
   return { videoId, title: v.title, axes, score: comp.score === null ? null : Math.round(comp.score), coverage: round(comp.coverage, 2), prediction: predict(comp.score, model.map),
@@ -677,11 +722,20 @@ export function expectedAt(channelId, isShort, h, excludeId = null) {
     if (v !== null) fromSnaps.push(v);
   }
   if (fromSnaps.length >= 3) return { expected: median(fromSnaps), source: `daily snapshots of ${fromSnaps.length} earlier uploads at the same age`, peers: fromSnaps.length, confidence: 'medium' };
-  const exp = Number(getSetting('radar_curve_exponent', 0.6));
-  const est = peers.map(p => ({ ageH: (Date.now() - Date.parse(p.published_at)) / HOUR, views: p.view_count })).filter(p => p.ageH >= 14 * 24 && p.ageH <= 180 * 24)
+  const isIg = String(channelId).startsWith('ig:');
+  // Reels collect most of their views in the first day or two, so their curve is flatter than YouTube's.
+  const exp = isIg ? Number(getSetting('radar_curve_exponent_ig', 0.35)) : Number(getSetting('radar_curve_exponent', 0.6));
+  const pool = isIg ? igPeers(excludeId) : peers.map(p => ({ ageH: (Date.now() - Date.parse(p.published_at)) / HOUR, views: p.view_count }));
+  const est = pool.filter(p => p.ageH >= (isIg ? 7 : 14) * 24 && p.ageH <= 180 * 24)
     .map(p => p.views * Math.min(1, (h / p.ageH)) ** exp);
   if (est.length >= 3) return { expected: median(est), source: `estimate from ${est.length} uploads' current views on a front-loaded curve (no launch history yet — accuracy improves as hourly ticks accumulate)`, peers: est.length, confidence: 'low' };
   return { expected: null, source: 'not enough earlier uploads to form a baseline', peers: 0, confidence: 'none' };
+}
+
+function igPeers(excludeId) {
+  if (!db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'ig_media'").get()) return [];
+  return db.prepare("SELECT published_at, views FROM ig_media WHERE id != ? AND views IS NOT NULL AND (product_type = 'REELS' OR media_type = 'VIDEO')").all(String(excludeId || '').replace(/^ig:/, ''))
+    .map(r => ({ ageH: (Date.now() - Date.parse(r.published_at)) / HOUR, views: r.views }));
 }
 
 export function classify(index, ageHours, confidence) {
@@ -740,9 +794,10 @@ async function watchTickInner({ log = () => {} } = {}) {
       seen.add(l.id); targets.push({ ch: l, kind: 'competitor', owner: o.id, days: compDays });
     }
   }
-  const summary = { channels: 0, watched: 0, ticks: 0, alerts: [], errors: [], at: new Date().toISOString() };
+  const summary = { channels: 0, watched: 0, ticks: 0, alerts: [], errors: [], shortsStarted: [], at: new Date().toISOString() };
   const want = new Map();
   const autopilotQueue = [];
+  const breakoutQueue = [];
   for (const t of targets) {
     if (!t.ch.uploads_playlist) continue;
     try {
@@ -756,14 +811,13 @@ async function watchTickInner({ log = () => {} } = {}) {
     } catch (e) { summary.errors.push(`${t.ch.title}: ${e.message}`); }
   }
   // Keep ticking videos that are still inside their window even if they dropped off page 1.
-  for (const w of db.prepare('SELECT * FROM radar_watch WHERE active = 1').all()) {
+  for (const w of db.prepare("SELECT * FROM radar_watch WHERE active = 1 AND kind != 'instagram'").all()) {
     if (want.has(w.video_id)) continue;
     const t = targets.find(x => x.ch.id === w.channel_id);
     if (t) want.set(w.video_id, t);
   }
-  if (!want.size) { db.prepare("INSERT INTO settings(key, value) VALUES ('radar_last_watch', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify(summary)); return summary; }
   let vids = [];
-  try { vids = await fetchVideosByIds([...want.keys()], { fresh: true }); } catch (e) { summary.errors.push('videos.list: ' + e.message); }
+  if (want.size) { try { vids = await fetchVideosByIds([...want.keys()], { fresh: true }); } catch (e) { summary.errors.push('videos.list: ' + e.message); } }
   const now = Date.now();
   const upsert = db.prepare(`INSERT INTO radar_watch (video_id, channel_id, kind, owner_channel_id, title, thumbnail, published_at, is_short) VALUES (@video_id, @channel_id, @kind, @owner, @title, @thumbnail, @published_at, @is_short)
     ON CONFLICT(video_id) DO UPDATE SET title = excluded.title, thumbnail = excluded.thumbnail, is_short = excluded.is_short`);
@@ -796,6 +850,7 @@ async function watchTickInner({ log = () => {} } = {}) {
         : `Radar: ${t.ch.title}'s "${v.title}" is at ${x}× their usual pace after ${hrs}h. A response or better-angle video could ride this demand.`;
       summary.alerts.push(addAlert(t.owner, t.kind === 'owned' ? 'radar_breakout' : 'radar_competitor_breakout', title, { videoId: v.id, channelId: v.channel_id, x: index, ageHours: ageH }));
       db.prepare('UPDATE radar_watch SET alerted_breakout = 1 WHERE video_id = ?').run(v.id);
+      if (t.kind === 'owned' && !v.is_short) breakoutQueue.push(v.id);
     }
     if (t.kind === 'owned' && ageH >= 24 && index !== null && index < 0.6 && base.confidence !== 'low' && !w.alerted_lagging) {
       summary.alerts.push(addAlert(t.owner, 'radar_lagging', `Radar: "${v.title}" is at ${x}× your usual pace after ${hrs}h. Test a new title or thumbnail now (Packaging → Thumbnail / Staged edits); packaging is the fastest lever in the first days.`, { videoId: v.id, channelId: v.channel_id, x: index, ageHours: ageH }));
@@ -811,10 +866,53 @@ async function watchTickInner({ log = () => {} } = {}) {
     }
   }
   // Videos past their window stop ticking but keep their final reading (and their launch curve for future baselines).
+  const igDaysAll = Number(getSetting('radar_watch_ig_days', 3));
   for (const w of db.prepare('SELECT video_id, published_at, kind FROM radar_watch WHERE active = 1').all()) {
-    const days = w.kind === 'owned' ? ownDays : compDays;
+    const days = w.kind === 'owned' ? ownDays : w.kind === 'instagram' ? igDaysAll : compDays;
     if (now - Date.parse(w.published_at) > days * DAY) db.prepare('UPDATE radar_watch SET active = 0 WHERE video_id = ?').run(w.video_id);
   }
+  // Instagram Reels: same pace-vs-usual reading, against your earlier reels.
+  if (getSetting('radar_watch_instagram', '1') === '1') {
+    try {
+      const igw = await import('./igwatch.js');
+      if (igw.configured()) {
+        const igDays = Number(getSetting('radar_watch_ig_days', 3));
+        const igCh = igw.igChannelId();
+        const owner = owned[0]?.id || null;
+        // First run (or after a reset): pull insights for older reels too so new ones have a baseline right away.
+        const fresh = igw.peers().filter(p => p.ageH >= 7 * 24).length < 5;
+        const synced = await igw.syncMedia(fresh ? { limit: 25 } : { limit: 10, insightsDays: igDays });
+        for (const m of synced) {
+          if (m.views === null || m.views === undefined || !m.published_at) continue;
+          const ageH = (now - Date.parse(m.published_at)) / HOUR;
+          if (ageH < 0 || ageH > igDays * 24) continue;
+          const vid = 'ig:' + m.id;
+          const title = String(m.caption || 'Instagram reel').split('\n')[0].slice(0, 100) || 'Instagram reel';
+          const existing = db.prepare('SELECT * FROM radar_watch WHERE video_id = ?').get(vid);
+          upsert.run({ video_id: vid, channel_id: igCh, kind: 'instagram', owner, title, thumbnail: m.thumbnail, published_at: m.published_at, is_short: 1 });
+          db.prepare('INSERT INTO radar_ticks (video_id, ts, age_hours, views, likes, comments) VALUES (?, ?, ?, ?, ?, ?)').run(vid, new Date(now).toISOString(), ageH, m.views, m.likes, m.comments);
+          summary.ticks++;
+          const base = expectedAt(igCh, true, ageH, vid);
+          const index = base.expected ? m.views / Math.max(1, base.expected) : null;
+          const status = classify(index, ageH, base.confidence);
+          db.prepare(`UPDATE radar_watch SET last_tick = ?, age_hours = ?, views = ?, likes = ?, comments = ?, expected = ?, idx = ?, peak_idx = MAX(COALESCE(peak_idx, 0), COALESCE(?, 0)), status = ?, baseline_source = ?, confidence = ?, active = 1 WHERE video_id = ?`)
+            .run(new Date(now).toISOString(), ageH, m.views, m.likes, m.comments, base.expected, index, index, status, base.source, base.confidence, vid);
+          summary.watched++;
+          if (status === 'breakout' && !existing?.alerted_breakout) {
+            summary.alerts.push(addAlert(owner, 'ig_breakout', `Instagram: "${title}" is at ${index.toFixed(1)}× your usual reel pace after ${Math.round(ageH)}h. Reply to comments now, pin it to your profile grid, and post a follow-up while it's hot.`, { url: m.permalink, mediaId: m.id, x: index, ageHours: ageH }));
+            db.prepare('UPDATE radar_watch SET alerted_breakout = 1 WHERE video_id = ?').run(vid);
+          }
+        }
+      }
+    } catch (e) { summary.errors.push('instagram: ' + e.message); }
+  }
+
+  // Shorts from breakouts (long-form uploads only; runs in the background — cutting takes minutes).
+  if (breakoutQueue.length) {
+    try { const clips = await import('./clips.js'); summary.shortsStarted = breakoutQueue.filter(id => clips.onBreakout(id)); }
+    catch (e) { summary.errors.push('shorts: ' + e.message); }
+  }
+
   // Autopilot: act on lagging owned uploads, then grade earlier changes on real CTR.
   summary.autopilot = [];
   if (autopilotQueue.length || db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'autopilot_actions'").get()) {

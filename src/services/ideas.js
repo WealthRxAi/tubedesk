@@ -9,6 +9,7 @@ import { risingSuggestions } from './discovery.js';
 import { titleSeed } from './packaging.js';
 import { scorePackages, buildCorpus, tokens, jaccard, aiAvailable } from './radar.js';
 import { median } from './stats.js';
+import { fetchThreads, clusterQuestions } from './comments.js';
 import { notify } from './notify.js';
 import * as ai from './ai.js';
 
@@ -77,6 +78,17 @@ export async function gatherSignals(channelId) {
       for (const sug of (r.newSuggestions.length ? r.newSuggestions : r.current).slice(0, 4)) signals.push({ id: 'A' + (++n), type: r.newSuggestions.length ? 'new autocomplete suggestion' : 'autocomplete suggestion', text: `"${sug}"` });
     } catch { /* suggest optional */ }
   }
+  // 5. Questions your viewers keep asking in comments (last 30 days, not yet answered by you), grouped by topic.
+  if (getSetting('ideas_comments', '1') === '1') {
+    try {
+      const threads = await fetchThreads({ channelId, ownerChannelId: channelId, maxPages: Number(getSetting('ideas_comment_pages', 2)) });
+      const recentQs = threads.filter(t => t.isQuestion && !t.ownerReplied && !t.isOwner && now - Date.parse(t.published_at || 0) <= 30 * 86400000);
+      clusterQuestions(recentQs).slice(0, 6).forEach((c, i) => {
+        const ex = c.examples.sort((a, b) => b.likes - a.likes)[0];
+        signals.push({ id: 'Q' + (i + 1), type: 'viewer question', text: `"${String(ex.text).replace(/\s+/g, ' ').slice(0, 160)}" — ${c.count} question${c.count > 1 ? 's' : ''} about "${c.topic}"${c.likes ? `, ${c.likes} likes` : ''}`, ref: ex.videoId || null });
+      });
+    } catch { /* comments optional (disabled comments, quota) */ }
+  }
   const covered = corpus.filter(r => r.own).sort((a, b) => b.ts - a.ts).slice(0, 25).map(r => r.title);
   return { signals, covered };
 }
@@ -95,7 +107,7 @@ ${signals.map(s => `[${s.id}] ${s.type}: ${s.text}`).join('\n')}
 Recently covered by this channel (do not repeat these):
 ${covered.map(t => '- ' + t).join('\n') || '- nothing yet'}
 
-Rules: every idea cites at least one signal id in "sources"; never copy a competitor's title — find the angle they missed or make a stronger, honest promise; three different title options per idea, each under 60 characters; "hook" is the first two sentences of the video; "thumbText" is 2-4 words that complement the best title; "format" is "long" or "short".
+Rules: every idea cites at least one signal id in "sources"; a viewer question answered well is often the strongest idea; never copy a competitor's title — find the angle they missed or make a stronger, honest promise; three different title options per idea, each under 60 characters; "hook" is the first two sentences of the video; "thumbText" is 2-4 words that complement the best title; "format" is "long" or "short".
 Return JSON: {"ideas":[{"topic":"...","angle":"why this, why now — one sentence","titles":["...","...","..."],"keyword":"...","thumbText":"...","hook":"...","format":"long","sources":["C1"]}]}`;
   const out = await ai.ask('daily_ideas', prompt, { json: true });
   let ideas = (out.ideas || []).filter(i => Array.isArray(i.titles) && i.titles.some(t => String(t).trim())).slice(0, count);

@@ -22,10 +22,15 @@ function channelResource(c) {
   return { id: c.id, snippet: { title: c.title, customUrl: c.handle, description: `${c.title} — money and legal help for families caring for aging parents.`, country: c.country, publishedAt: '2025-06-01T00:00:00Z', thumbnails: { high: { url: `https://yt3.ggpht.com/${c.id}=s240` } } }, statistics: { subscriberCount: String(c.subs), viewCount: String(c.views), videoCount: String(c.videos) }, contentDetails: { relatedPlaylists: { uploads: 'UU' + c.id.slice(2) } }, brandingSettings: { channel: { country: c.country } } };
 }
 export const calls = [];
+// Videos uploaded through the mock (resumable upload) and their current status, so tests can check unscheduling.
+export const UPLOADED = { n: 0 };
 // Reporting API state: tests can change how many daily reports exist and the CTR each video gets.
 // Title changes made through videos.update persist, like on YouTube (tests can also set them to simulate the owner).
 export const TITLE_OVERRIDES = {};
 const ptDay = ms => new Date(ms).toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+// Instagram reels: older ones form the baseline; tests add a fresh one to trigger a breakout.
+export const IG = { media: [{ id: 'IGR0000', caption: 'Reel 0: the form that saves $40K', ageH: 20, views: 1900 },
+  ...Array.from({ length: 12 }, (_, i) => ({ id: 'IGR' + String(i + 1).padStart(4, '0'), caption: `Reel ${i + 1}: caregiving money tip`, ageH: 24 * (8 + i * 5), views: 2000 + ((i * 733) % 1500) }))] };
 export const REPORTING = { jobs: [], days: 40, ctr: (i) => (i % 5 === 0 ? 8.5 : i === 1 ? 1.6 : 4.2) };
 // Video thumbnails are served by the mock itself so tests never touch the network.
 let THUMB_BASE = 'https://i.ytimg.com';
@@ -69,15 +74,17 @@ export function startMock(port = 0) {
     }
     // --- publishing mocks: YouTube resumable upload + thumbnails, Instagram Graph API ---
     if (u.pathname.endsWith('/upload/videos') || u.pathname.endsWith('/upload/videos/session')) {
-      if (u.pathname.endsWith('/session')) { let n = 0; req.on('data', d => n += d.length); return req.on('end', () => { calls.at(-1).bytes = n; json({ id: 'NEWVID00001', status: { uploadStatus: 'uploaded', privacyStatus: 'private' } }); }); }
+      if (u.pathname.endsWith('/session')) { let n = 0; req.on('data', d => n += d.length); return req.on('end', () => { calls.at(-1).bytes = n; const id = 'NEWVID' + String(++UPLOADED.n).padStart(5, '0'); UPLOADED[id] = { privacyStatus: UPLOADED.lastInit?.status?.privacyStatus || 'private', publishAt: UPLOADED.lastInit?.status?.publishAt, selfDeclaredMadeForKids: false, uploadStatus: 'uploaded', embeddable: true, license: 'youtube', publicStatsViewable: true }; json({ id, status: UPLOADED[id] }); }); }
       let b = ''; req.on('data', d => b += d);
-      return req.on('end', () => { calls.at(-1).body = JSON.parse(b || '{}'); calls.at(-1).xlen = req.headers['x-upload-content-length']; res.writeHead(200, { location: `http://127.0.0.1:${server.address().port}/upload/videos/session`, 'content-type': 'application/json' }); res.end('{}'); });
+      return req.on('end', () => { calls.at(-1).body = JSON.parse(b || '{}'); UPLOADED.lastInit = calls.at(-1).body; calls.at(-1).xlen = req.headers['x-upload-content-length']; res.writeHead(200, { location: `http://127.0.0.1:${server.address().port}/upload/videos/session`, 'content-type': 'application/json' }); res.end('{}'); });
     }
     if (u.pathname.endsWith('/upload/thumbnails/set')) { req.on('data', () => {}); return req.on('end', () => json({ items: [{ default: { url: 'x' } }] })); }
     if (u.pathname.includes('/ig/')) {
       const p = u.pathname.split('/ig/')[1];
       if (p === 'me') return json({ id: '17841400000000001', username: 'salstack.ai', account_type: 'BUSINESS', media_count: 12 });
       if (p === 'refresh_access_token') return json({ access_token: 'IG_REFRESHED', token_type: 'bearer', expires_in: 5184000 });
+      if (p.endsWith('/media') && req.method === 'GET') return json({ data: IG.media.map(m => ({ id: m.id, caption: m.caption, media_type: 'VIDEO', media_product_type: 'REELS', timestamp: new Date(Date.now() - m.ageH * 3600000).toISOString().replace(/\.\d+Z$/, '+0000'), permalink: `https://www.instagram.com/reel/${m.id}/`, thumbnail_url: `${THUMB_BASE}/vi/${m.id}/ig.jpg`, like_count: Math.round(m.views * 0.05), comments_count: Math.round(m.views * 0.004) })).slice(0, Number(q.limit || 25)) });
+      if (/\/insights$/.test(p)) { const m = IG.media.find(x => x.id === p.split('/')[0]); if (!m) return json({ error: { message: 'no media' } }, 400); return json({ data: [['views', m.views], ['reach', Math.round(m.views * 0.7)], ['saved', Math.round(m.views * 0.01)], ['shares', Math.round(m.views * 0.008)], ['total_interactions', Math.round(m.views * 0.07)]].map(([name, v]) => ({ name, period: 'lifetime', values: [{ value: v }] })) }); }
       if (p.endsWith('/media')) { calls.at(-1).igMedia = q; return json({ id: 'CONTAINER1' }); }
       if (p === 'CONTAINER1') { calls.at(-1).poll = (calls.at(-1).poll || 0); const n = calls.filter(c => c.path.endsWith('/ig/CONTAINER1')).length; return json({ status_code: n >= 2 ? 'FINISHED' : 'IN_PROGRESS', status: 'ok' }); }
       if (p.endsWith('/media_publish')) return json({ id: 'IGMEDIA1' });
@@ -117,7 +124,8 @@ export function startMock(port = 0) {
       return json({ items, nextPageToken: (page + 1) * 50 < n ? String(page + 1) : undefined });
     }
     if (u.pathname.endsWith('/videos')) {
-      if (req.method === 'PUT') { let b = ''; req.on('data', d => b += d); return req.on('end', () => { const j = JSON.parse(b); if (j.snippet?.title) TITLE_OVERRIDES[j.id] = j.snippet.title; json(j); }); }
+      if (req.method === 'PUT') { let b = ''; req.on('data', d => b += d); return req.on('end', () => { const j = JSON.parse(b); calls.at(-1).body = j; if (j.snippet?.title) TITLE_OVERRIDES[j.id] = j.snippet.title; if (j.status && UPLOADED[j.id]) UPLOADED[j.id] = { ...j.status, uploadStatus: 'processed' }; json(j); }); }
+      if (q.id && UPLOADED[q.id]) return json({ items: [{ id: q.id, status: UPLOADED[q.id] }] });
       if (q.chart) { const items = []; for (let i = 0; i < 20; i++) items.push(videoResource(vid('UCcomp000000000000000002', i))); return json({ items }); }
       const ids = q.id.split(','); const items = [];
       for (const id of ids) { for (const chId of Object.keys(CH)) for (let i = 0; i < 60; i++) { const v = vid(chId, i); if (v.id === id) items.push(videoResource(v)); } }

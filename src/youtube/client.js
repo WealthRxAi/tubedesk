@@ -146,7 +146,7 @@ export async function ytWrite(endpoint, { method = 'POST', params = {}, json = n
   if (rawBody) { headers['Content-Type'] = contentType || 'application/octet-stream'; body = rawBody; }
   else if (json) { headers['Content-Type'] = 'application/json'; body = JSON.stringify(json); }
   const t0 = Date.now();
-  const res = await fetch(url, { method, headers, body });
+  const res = await fetch(url, { method, headers, body, signal: AbortSignal.timeout(90_000) });
   const ms = Date.now() - t0;
   const out = await res.json().catch(() => ({}));
   if (!res.ok) {

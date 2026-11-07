@@ -10,7 +10,7 @@ subprocess.run(['pkill', '-f', 'node test/mock-youtube.js']); subprocess.run(['p
 import atexit; atexit.register(lambda: [p.kill() for p in (mock, srv)])
 env = dict(os.environ, MOCK_PORT=str(mock_port))
 mock = subprocess.Popen([sys.executable and 'node', 'test/mock-youtube.js'], cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-env2 = dict(os.environ, PORT=str(port), TUBEDESK_DATA_DIR=data, TUBEDESK_NO_SCHEDULER='1', YT_API_BASE=f'http://127.0.0.1:{mock_port}/youtube/v3', YT_ANALYTICS_BASE=f'http://127.0.0.1:{mock_port}/v2/reports', YT_SUGGEST_URL=f'http://127.0.0.1:{mock_port}/complete/search', YT_REPORTING_BASE=f'http://127.0.0.1:{mock_port}/reporting/v1', YT_UPLOAD_BASE=f'http://127.0.0.1:{mock_port}/upload')
+env2 = dict(os.environ, PORT=str(port), TUBEDESK_DATA_DIR=data, TUBEDESK_NO_SCHEDULER='1', YT_API_BASE=f'http://127.0.0.1:{mock_port}/youtube/v3', YT_ANALYTICS_BASE=f'http://127.0.0.1:{mock_port}/v2/reports', YT_SUGGEST_URL=f'http://127.0.0.1:{mock_port}/complete/search', YT_REPORTING_BASE=f'http://127.0.0.1:{mock_port}/reporting/v1', YT_UPLOAD_BASE=f'http://127.0.0.1:{mock_port}/upload', IG_GRAPH_BASE=f'http://127.0.0.1:{mock_port}/ig')
 srv = subprocess.Popen(['node', 'src/server.js'], cwd=ROOT, env=env2, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 base = f'http://127.0.0.1:{port}'
 
@@ -44,6 +44,20 @@ api('/autopilot/run/owne0000001', 'POST', {'force': True})
 api('/settings', 'PUT', {'autopilot_mode': 'suggest'}); api('/autopilot/run/owne0000002', 'POST', {'force': True}); api('/settings', 'PUT', {'autopilot_mode': 'auto', 'autopilot_min_gain': '99'})
 api('/autopilot/run/owne0000003', 'POST', {'force': True})
 api(f'/ideas/{OWNER}/run', 'POST', {})
+# Shorts (fake whisper + real ffmpeg), Instagram reels on the watch, snapshots for the all-channels board
+ffmpeg = next((f for f in ['/usr/local/bin/ffmpeg', '/usr/bin/ffmpeg', '/opt/homebrew/bin/ffmpeg'] if os.path.exists(f)), None)
+src = os.path.join(data, 'episode.mp4'); model = os.path.join(data, 'ggml-test.bin'); open(model, 'w').write('x')
+subprocess.run([ffmpeg, '-y', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc=size=1280x720:rate=30:duration=45', '-f', 'lavfi', '-i', 'sine=frequency=330:duration=45', '-shortest', '-pix_fmt', 'yuv420p', '-c:a', 'aac', src], check=True)
+api('/settings', 'PUT', {'whisper_path': os.path.join(ROOT, 'test', 'fake-whisper.mjs'), 'whisper_model': model, 'clips_min_seconds': '8', 'clips_max_seconds': '12', 'clips_count': '2', 'clips_publish': 'review',
+                         'ig_access_token': 'IGTOKEN', 'ig_user_id': '17841400000000001', 'ig_username': 'salstack.ai', 'public_base_url': 'https://tubedesk.example.org'})
+api('/autopilot/assets', 'POST', {'videoId': 'owne0000004', 'kind': 'source', 'path': src})
+made = api('/shorts/make/owne0000004?wait=1', 'POST', {})
+api(f"/shorts/clip/{made['clips'][0]['id']}/schedule", 'POST')
+api('/radar/watch/run', 'POST')
+db = sqlite3.connect(os.path.join(data, 'tubedesk.sqlite'))
+for d, v, sb in [(14, 170000, 1100), (7, 176000, 1180)]:
+    db.execute("INSERT OR REPLACE INTO snapshots (entity_type, entity_id, taken_at, day, views, subs) VALUES ('channel', ?, ?, date('now', ?), ?, ?)", (OWNER, time.strftime('%Y-%m-%dT%H:%M:%SZ'), f'-{d} days', v, sb))
+db.commit(); db.close()
 api('/settings', 'PUT', {'ai_provider': 'none'})
 
 ROUTES = ['/', '/channels', '/library', '/analytics/overview', '/analytics/traffic', '/analytics/audience', '/analytics/subscribers', '/analytics/watch', '/analytics/content', '/analytics/slots', '/analytics/studio', '/analytics/revenue',
@@ -52,7 +66,7 @@ ROUTES = ['/', '/channels', '/library', '/analytics/overview', '/analytics/traff
           '/packaging/title?title=7%20Medicaid%20Rules', '/packaging/description', '/packaging/chapters', '/packaging/thumbnail', '/packaging/translate', '/packaging/health', '/packaging/staged', '/packaging/safety',
           '/coach/chat', '/coach/ideas', '/coach/audit', '/coach/plan', '/coach/validate', '/coach/beginner', '/coach/lessons', '/coach/context',
           '/production/script', '/production/transcript', '/production/clips', '/production/repurpose', '/production/hook', '/comments', '/comments?filter=questions', '/calculators', '/settings',
-          '/radar/ideas', '/radar/score', '/radar/watch', '/radar/autopilot', '/radar/calibration', '/radar/history', '/radar/method']
+          '/portfolio', '/radar/ideas', '/radar/score', '/radar/watch', '/radar/shorts', '/radar/autopilot', '/radar/calibration', '/radar/history', '/radar/method']
 errors = []
 os.makedirs(os.path.join(ROOT, 'test', 'screenshots'), exist_ok=True)
 with sync_playwright() as p:
@@ -108,10 +122,24 @@ with sync_playwright() as p:
     pg.goto(base + '/#/radar/ideas'); pg.wait_for_timeout(900)
     t = pg.inner_text('#main'); assert 'Today' in t and 'Evidence' in t and 'Refine in Score' in t, t[:500]
     pg.screenshot(path=os.path.join(ROOT, 'test', 'screenshots', 'radar_ideas_full.png'), full_page=True)
-    pg.click('[data-score]'); pg.wait_for_timeout(700); assert '5-Year Lookback' in pg.input_value('#titles') or 'Lookback' in pg.input_value('#titles')
+    pg.click('[data-score]'); pg.wait_for_timeout(700); v = pg.input_value('#titles'); assert any(k in v for k in ('Lookback', 'Assisted Living', 'Power of Attorney')), v
     pg.goto(base + '/#/'); pg.wait_for_timeout(1200); assert "Today's top ideas" in pg.inner_text('#main')
     pg.goto(base + '/#/analytics/studio'); pg.wait_for_timeout(1200); t = pg.inner_text('#main'); assert 'Impressions & CTR — automatic' in t and 'live' in t, t[:400]
     pg.screenshot(path=os.path.join(ROOT, 'test', 'screenshots', 'analytics_ctr_full.png'), full_page=True)
+    # Shorts tab: engine status, best slots, clip previews with radar scores, one queued
+    pg.goto(base + '/#/radar/shorts'); pg.wait_for_timeout(1500)
+    t = pg.inner_text('#main'); assert 'Shorts from breakouts' in t and 'whisper.cpp' in t and 'Best Shorts slots' in t and 'queued' in t and 'ready' in t, t[:800]
+    assert pg.locator('video.clip-vid').count() == 2
+    pg.screenshot(path=os.path.join(ROOT, 'test', 'screenshots', 'radar_shorts_full.png'), full_page=True)
+    pg.click('[data-cancel]'); pg.wait_for_timeout(900); assert 'cancelled' in pg.inner_text('#main')
+    # Live watch: Instagram section
+    pg.goto(base + '/#/radar/watch'); pg.wait_for_timeout(1000); t = pg.inner_text('#main'); assert 'Instagram reels' in t and 'Reel 0' in t, t[:1200]
+    pg.screenshot(path=os.path.join(ROOT, 'test', 'screenshots', 'radar_watch_instagram.png'), full_page=True)
+    # All channels board
+    pg.goto(base + '/#/portfolio'); pg.wait_for_timeout(1500); t = pg.inner_text('#main')
+    assert 'All channels' in t and 'The Parent Plan' in t and 'Views this week' in t and 'Instagram @salstack.ai' in t and '+33%' in t, t[:1200]
+    pg.screenshot(path=os.path.join(ROOT, 'test', 'screenshots', 'portfolio_full.png'), full_page=True)
+    pg.goto(base + '/#/settings'); pg.wait_for_timeout(1200); assert 'whisper.cpp' in pg.inner_text('#main')
     pg.goto(base + '/#/radar/calibration'); pg.wait_for_timeout(600); pg.click('#cal'); pg.wait_for_timeout(4000)
     assert 'Rank accuracy' in pg.inner_text('#main')
     b.close()

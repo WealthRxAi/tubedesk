@@ -1,7 +1,7 @@
 /* Virality radar: pre-publish package scoring, calibration against the channel's own history, live breakout watch. */
 (() => {
   const { view, api, h, raw, safe, esc, fmt, fmtFull, ago, date, videoCell, stat, empty, needOwned, scoreRing, err, toast, busy, state, openVideo, ls, lineChart, openDrawer, scoreClass } = TD;
-  const TABS = [['ideas', 'Daily ideas'], ['score', 'Score an idea'], ['watch', 'Live watch'], ['autopilot', 'Autopilot'], ['calibration', 'Calibration'], ['history', 'History'], ['method', 'Method']];
+  const TABS = [['ideas', 'Daily ideas'], ['score', 'Score an idea'], ['watch', 'Live watch'], ['shorts', 'Shorts'], ['autopilot', 'Autopilot'], ['calibration', 'Calibration'], ['history', 'History'], ['method', 'Method']];
   let AXES = null;
   const axesInfo = async () => AXES || (AXES = await api('/radar/axes'));
 
@@ -10,7 +10,7 @@
     main.innerHTML = h`<div class="page-head"><div><h1>Virality radar</h1><div class="sub">Score a package before you publish, calibrated to what actually moved views on this channel — then watch every new upload against its usual launch curve.</div></div></div>
       <div class="tabs">${TABS.map(([k, l]) => h`<a href="#/radar/${k}" class="${tab === k ? 'active' : ''}">${l}</a>`).join('')}</div><div id="body"></div>`;
     const body = main.querySelector('#body');
-    await ({ ideas, score, watch, autopilot, calibration, history, method }[tab] || score)(body, r);
+    await ({ ideas, score, watch, shorts, autopilot, calibration, history, method }[tab] || score)(body, r);
   });
 
   // ---------- shared visuals ----------
@@ -172,7 +172,7 @@
   async function watch(body) {
     const ch = state.current; if (!ch) { body.innerHTML = needOwned(); return; }
     const d = await api(`/radar/watch/${ch.id}`);
-    const own = d.videos.filter(v => v.kind === 'owned'), comp = d.videos.filter(v => v.kind !== 'owned');
+    const own = d.videos.filter(v => v.kind === 'owned'), comp = d.videos.filter(v => v.kind === 'competitor'), igv = d.videos.filter(v => v.kind === 'instagram');
     const table = list => list.length ? h`<table><thead><tr><th>Video</th><th class="num">Age</th><th class="num">Views</th><th class="num">Usual at this age</th><th class="num">Pace</th><th>Status</th><th class="num">Peak</th><th class="num">CTR</th><th class="num">Retention</th><th>Curve</th></tr></thead><tbody>
       ${list.map(v => h`<tr class="clickable" data-curve="${v.video_id}"><td><div class="vt"><img class="thumb sm ${v.is_short ? 'v' : ''}" src="${v.thumbnail || ''}"><div><div class="t">${v.title}</div><div class="m">${v.kind === 'owned' ? '' : v.channel_title + ' · '}${v.active ? 'watching' : 'final reading'}${v.kind === 'owned' && v.autopilot_note ? h` · autopilot: ${v.autopilot_note.slice(0, 80)}` : ''}</div></div></div></td>
         <td class="num">${v.age_hours === null ? '—' : v.age_hours < 48 ? Math.round(v.age_hours) + 'h' : (v.age_hours / 24).toFixed(1) + 'd'}</td><td class="num">${fmtFull(v.views)}</td><td class="num" title="${v.baseline_source || ''}">${v.expected === null ? '—' : fmtFull(Math.round(v.expected))}${v.confidence === 'low' ? h` <span class="badge warn" title="${v.baseline_source || ''}">est.</span>` : ''}</td>
@@ -183,6 +183,7 @@
     body.innerHTML = h`<div class="row between" style="margin-bottom:12px"><div class="mini">${lr ? h`Last check ${ago(lr.at)} · ${lr.watched} videos · ${lr.channels} channels${lr.errors?.length ? h` · <span class="down">${lr.errors.length} error(s)</span>` : ''}` : 'Not run yet.'} Runs on its own every hour (≈2 quota units per channel).</div><button id="run" class="primary sm">Check now</button></div>
       ${lr?.errors?.length ? h`<div class="note bad" style="margin-bottom:12px">${lr.errors.join(' · ')}</div>` : ''}
       <div class="card"><h2>Your uploads</h2>${table(own) || empty('No uploads on the radar yet. Every new upload is picked up within the hour and compared with your usual launch curve.')}</div>
+      <div class="card" style="margin-top:14px"><h2>Instagram reels</h2>${table(igv) || empty('Connect Instagram in Settings → Instagram and your reels from the last 3 days are watched here against your usual reel pace.')}</div>
       <div class="card" style="margin-top:14px"><h2>Competitor uploads</h2>${table(comp) || empty('No recent competitor uploads. Track competitors under Competitors to catch their breakouts while they are still rising.')}</div>
       <div class="src">Pace = views now ÷ what your uploads usually have at the same age. Baselines come from hourly launch curves of earlier uploads once enough exist, otherwise from daily snapshots, otherwise an estimate (marked est., which needs ${'1.5×'} the breakout threshold before alerting). Breakout and lagging alerts land in Alerts.</div>`;
     body.querySelector('#run').onclick = async e => { busy(e.target, true); try { const r = await api('/radar/watch/run', { method: 'POST' }); toast(`Checked ${r.watched} videos${r.alerts.length ? `, ${r.alerts.length} alert(s)` : ''}`, 'ok'); await watch(body); } catch (x) { err(x); busy(e.target, false); } };
@@ -199,8 +200,10 @@
       document.getElementById('drawer-inner').innerHTML = h`<div class="drawer-head"><div><h2>${v.title}</h2><div class="mini">${v.kind === 'owned' ? 'Your upload' : 'Competitor upload'} · published ${date(v.published_at)} · ${fmtFull(v.views)} views</div></div><button onclick="TD.closeDrawer()">Close</button></div>
         <div class="grid g4">${raw(stat('Pace now', xFmt(v.idx)))}${raw(stat('Peak pace', xFmt(v.peak_idx)))}${raw(stat('Status', esc(v.status || '—')))}${raw(stat('Likes / comments', `${fmt(v.likes)} / ${fmt(v.comments)}`))}</div>
         <div class="card" style="margin-top:14px"><h2>Launch curve vs usual <span class="mini"><span class="lg b"></span> this video <span class="lg a"></span> usual at same age</span></h2>${raw(lineChart([{ values: c.expected.map(e => at(e.h)) }, { values: c.expected.map(e => e.v), cls: 'b' }], { labels: labels.map(l => '00000' + l), fill: false }))}<div class="src">Baseline: ${v.baseline_source || 'n/a'} (${v.confidence || 'n/a'} confidence).</div></div>
-        <div class="row" style="margin-top:12px"><a class="btn" href="https://www.youtube.com/watch?v=${v.video_id}" target="_blank" rel="noopener">Open on YouTube</a>${v.kind === 'owned' ? h`<button class="primary" id="ap-run">Run autopilot now</button><a class="btn" href="#/radar/autopilot" onclick="TD.closeDrawer()">Thumbnail bank & settings</a>` : h`<a class="btn" href="#/radar/score" onclick="TD.closeDrawer()">Score a response idea</a>`}</div>
+        <div class="row" style="margin-top:12px">${v.kind === 'instagram' ? '' : h`<a class="btn" href="https://www.youtube.com/watch?v=${v.video_id}" target="_blank" rel="noopener">Open on YouTube</a>`}${v.kind === 'owned' ? h`<button class="primary" id="ap-run">Run autopilot now</button>${v.is_short ? '' : h`<button id="mk-shorts">Cut Shorts from this</button>`}<a class="btn" href="#/radar/autopilot" onclick="TD.closeDrawer()">Thumbnail bank & settings</a>` : v.kind === 'instagram' ? '' : h`<a class="btn" href="#/radar/score" onclick="TD.closeDrawer()">Score a response idea</a>`}</div>
         ${v.kind === 'owned' && v.autopilot_note ? h`<div class="note" style="margin-top:10px"><b>Autopilot:</b> ${v.autopilot_note}</div>` : ''}<div id="ap-out" style="margin-top:10px"></div>`;
+      const mk = document.getElementById('mk-shorts');
+      if (mk) mk.onclick = async () => { busy(mk, true); try { await api(`/shorts/make/${id}`, { method: 'POST', body: {} }); toast('Cutting Shorts in the background — see Virality radar → Shorts', 'ok'); } catch (x) { err(x); } busy(mk, false); };
       const run = document.getElementById('ap-run');
       if (run) run.onclick = async () => { busy(run, true); const o = document.getElementById('ap-out'); o.innerHTML = h`<div class="loading"><span class="spinner"></span> Diagnosing, writing alternatives and scoring them — about a minute…</div>`; try { const a = await api(`/autopilot/run/${id}`, { method: 'POST', body: { force: true } }); o.innerHTML = actionCard(a); } catch (x) { o.innerHTML = h`<div class="note bad">${x.message}</div>`; } busy(run, false); };
     } catch (x) { document.getElementById('drawer-inner').innerHTML = h`<div class="note bad">${x.message}</div>`; }
@@ -224,6 +227,55 @@
       <table class="axes-t" style="margin-top:8px"><tbody>${i.titles.map(t => h`<tr><td>${t.title}</td><td class="num"><span class="axv ${scoreClass(t.score ?? 0)}">${t.score ?? '—'}</span></td></tr>`).join('')}</tbody></table>
       ${i.sources.length ? h`<div class="src">Evidence: ${i.sources.map(s => h`<span title="${s.type}">[${s.id}] ${s.text}</span>`).join(' · ')}</div>` : ''}
       <div class="row" style="margin-top:10px"><button class="sm" data-score="${i.id}">Refine in Score</button><button class="sm" data-st="saved" data-id="${i.id}">Save</button><button class="sm" data-st="used" data-id="${i.id}">Made it</button><button class="sm ghost" data-st="dismissed" data-id="${i.id}">Dismiss</button></div></div>`;
+  }
+
+  // ---------- Shorts ----------
+  const fmtWhen = iso => iso ? new Date(iso).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—';
+  function clipCard(c) {
+    const st = { ready: 'info', queued: 'ok', scheduled: 'ok', published: 'ok', failed: 'bad', cancelled: '', rendering: 'warn' }[c.status] || '';
+    return h`<div class="card clip-card"><div class="clip-row">${c.url ? h`<video class="clip-vid" src="${c.url}" ${c.coverUrl ? h`poster="${c.coverUrl}"` : ''} controls preload="none" playsinline></video>` : h`<div class="clip-vid empty-vid">${c.status}</div>`}
+      <div class="stack" style="flex:1;min-width:0"><div><span class="badge ${st}">${c.status}</span> <span class="mini">#${c.rank} · ${(c.end - c.start).toFixed(0)} s from ${Math.floor(c.start / 60)}:${String(Math.floor(c.start % 60)).padStart(2, '0')}</span></div>
+        <h3 style="margin:0">${c.title}</h3>${c.hook_text ? h`<div class="mini">On-screen hook: <b>${c.hook_text}</b></div>` : ''}<div class="mini">${c.description || ''}</div>
+        <div class="kv"><b>Radar</b><span>${c.score ?? '—'} · ${xFmt(c.prediction?.multiplier)} usual</span><b>Goes live</b><span>${fmtWhen(c.publish_at)}</span>
+          ${c.queue.length ? h`<b>Platforms</b><span>${c.queue.map(q => h`<span class="badge ${q.status === 'done' ? 'ok' : q.status === 'failed' ? 'bad' : ''}" title="${q.error || q.note || ''}">${q.platform} ${q.status}</span> ${q.result?.url ? h`<a href="${q.result.url}" target="_blank" rel="noopener">open</a>` : ''}`).join(' ')}</span>` : ''}</div>
+        ${c.error ? h`<div class="note bad">${c.error}</div>` : ''}
+        <div class="row">${c.status === 'ready' ? h`<button class="sm primary" data-sched="${c.id}">Schedule in best slots</button>` : ''}${['ready', 'queued', 'scheduled', 'failed'].includes(c.status) && (c.status !== 'failed' || c.queue.length) ? h`<button class="sm" data-now="${c.id}">${c.status === 'failed' ? 'Retry — publish now' : 'Publish now'}</button><button class="sm ghost" data-cancel="${c.id}">Cancel</button>` : ''}</div>
+      </div></div></div>`;
+  }
+  async function shorts(body) {
+    const ch = state.current; if (!ch) { body.innerHTML = needOwned(); return; }
+    const [st, list, slotsShort, board] = await Promise.all([api('/shorts/status'), api(`/shorts/${ch.id}`), api(`/slots/${ch.id}?format=short&count=5`), api(`/radar/watch/${ch.id}`)]);
+    const settingsAll = await api('/settings');
+    const e = st.engine, s = st.settings;
+    const byVideo = {};
+    for (const c of list) (byVideo[c.video_id] ||= { title: c.video_title, clips: [] }).clips.push(c);
+    const recent = board.videos.filter(v => v.kind === 'owned' && !v.is_short).slice(0, 6);
+    body.innerHTML = h`<div class="grid g2">
+      <div class="card"><h2>Shorts from breakouts <span class="badge ${s.enabled && e.ready ? 'ok' : 'warn'}">${s.enabled ? (e.ready ? 'on' : 'needs setup') : 'off'}</span></h2>
+        <p class="mini">When one of your long-form uploads breaks out, TubeDesk transcribes its source file on this Mac, picks the strongest self-contained moments, scores each title on the radar, cuts vertical clips with word-timed captions and an on-screen hook, and schedules them into your best Shorts slots — one per slot, so the YouTube upload quota is spread across days.</p>
+        <div class="kv"><b>Transcriber</b><span>${e.whisper ? h`<span class="up">✓ whisper.cpp</span> <code>${e.whisper}</code>` : h`<span class="down">✕ not installed</span> — <code>brew install whisper-cpp</code> (free)`}</span>
+          <b>Speech model</b><span>${e.modelName} ${e.modelReady ? h`<span class="up">✓ downloaded</span>` : h`<span class="mini">(downloads automatically on first use)</span>`}</span>
+          <b>ffmpeg</b><span>${e.ffmpeg ? h`<span class="up">✓</span>` : h`<span class="down">✕ brew install ffmpeg</span>`}</span>
+          <b>Instagram</b><span>${st.instagram ? h`<span class="up">✓ connected</span>` : h`<span class="mini">not connected (Settings → Instagram) — YouTube only</span>`}</span></div>
+        <div class="form cols" style="margin-top:8px"><label class="f">After cutting<select data-k="clips_publish"><option value="auto" ${s.publish === 'auto' ? 'selected' : ''}>Schedule automatically</option><option value="review" ${s.publish === 'review' ? 'selected' : ''}>Wait for my review</option></select></label>
+          <label class="f">Shorts per breakout<input type="number" min="1" max="6" data-k="clips_count" value="${s.count}"></label>
+          <label class="f">Speech model<select data-k="whisper_model_name">${['base.en', 'small.en', 'medium.en', 'small', 'medium'].map(m => h`<option ${e.modelName === m ? 'selected' : ''}>${m}</option>`).join('')}</select></label>
+          <label class="f">whisper path (optional)<input data-k="whisper_path" value="${settingsAll.whisper_path || ''}" placeholder="auto-detected"></label></div>
+        <div class="row" style="flex-wrap:wrap;margin-top:8px">${[['clips_enabled', 'Cut Shorts automatically on breakouts', s.enabled]].map(([k, l, v]) => h`<label class="row mini"><input type="checkbox" data-k="${k}" ${v ? 'checked' : ''}> ${l}</label>`).join('')}
+          ${['youtube', 'instagram'].map(p => h`<label class="row mini"><input type="checkbox" data-plat="${p}" ${s.platforms.includes(p) ? 'checked' : ''}> Post to ${p === 'youtube' ? 'YouTube Shorts' : 'Instagram Reels'}</label>`).join('')}</div>
+      </div>
+      <div class="card"><h2>Best Shorts slots</h2><table><tbody>${slotsShort.next.map(x => h`<tr><td>${x.local}</td><td class="num">${x.expectedX ? xFmt(x.expectedX) + ' usual' : '—'}</td></tr>`).join('')}</tbody></table><div class="src">${slotsShort.next[0]?.source || ''}. Long-form uploads can use the same: <code>"publishAt": "best"</code>.</div>
+        <h3 style="margin-top:12px">Cut Shorts from a recent upload</h3>${recent.length ? h`<table><tbody>${recent.map(v => h`<tr><td><div class="vt"><img class="thumb sm" src="${v.thumbnail || ''}"><div class="t">${v.title}</div></div></td><td><button class="sm" data-make="${v.video_id}">Cut Shorts</button></td></tr>`).join('')}</tbody></table>` : h`<div class="mini">Recent long-form uploads appear here once the live watch has seen them.</div>`}</div>
+    </div>
+    <h2 style="margin:18px 0 10px">Clips</h2>
+    ${Object.keys(byVideo).length ? Object.entries(byVideo).map(([vid, g]) => h`<h3 style="margin:12px 0 8px">From “${g.title || vid}”</h3><div class="stack">${g.clips.map(clipCard).join('')}</div>`).join('') : empty('No Shorts yet.', h`<br>They're cut automatically the next time one of your uploads breaks out — or press “Cut Shorts” above.`)}`;
+    const save = async (k, v) => { await api('/settings', { method: 'PUT', body: { [k]: v } }); toast('Saved', 'ok'); };
+    body.querySelectorAll('[data-k]').forEach(el => el.onchange = () => save(el.dataset.k, el.type === 'checkbox' ? (el.checked ? '1' : '0') : el.value.trim()));
+    body.querySelectorAll('[data-plat]').forEach(el => el.onchange = () => save('clips_platforms', [...body.querySelectorAll('[data-plat]')].filter(x => x.checked).map(x => x.dataset.plat).join(',')));
+    body.querySelectorAll('[data-make]').forEach(b => b.onclick = async () => { busy(b, true); try { await api(`/shorts/make/${b.dataset.make}`, { method: 'POST', body: {} }); toast('Cutting Shorts in the background — this page updates when you reopen it', 'ok'); } catch (x) { err(x); } busy(b, false); });
+    body.querySelectorAll('[data-sched]').forEach(b => b.onclick = async () => { busy(b, true); try { const r = await api(`/shorts/clip/${b.dataset.sched}/schedule`, { method: 'POST' }); toast(r.length ? `Scheduled for ${r[0].local}` : 'Nothing to post to — connect YouTube or Instagram', r.length ? 'ok' : undefined); shorts(body); } catch (x) { err(x); busy(b, false); } });
+    body.querySelectorAll('[data-now]').forEach(b => b.onclick = async () => { busy(b, true); try { await api(`/shorts/clip/${b.dataset.now}/publish-now`, { method: 'POST' }); toast('Publishing', 'ok'); shorts(body); } catch (x) { err(x); busy(b, false); } });
+    body.querySelectorAll('[data-cancel]').forEach(b => b.onclick = async () => { busy(b, true); try { const r = await api(`/shorts/clip/${b.dataset.cancel}/cancel`, { method: 'POST' }); toast(r.notes?.length ? r.notes.join(' ') : 'Cancelled', r.notes?.length ? undefined : 'ok'); shorts(body); } catch (x) { err(x); busy(b, false); } });
   }
 
   // ---------- Autopilot ----------

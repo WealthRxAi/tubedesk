@@ -7,6 +7,9 @@ import { refreshAll, addAlert } from '../services/competitors.js';
 import { watchTick, calibrate, buildCorpus } from '../services/radar.js';
 import * as reach from '../services/reach.js';
 import * as ideas from '../services/ideas.js';
+import * as clips from '../services/clips.js';
+import * as portfolio from '../services/portfolio.js';
+import * as igwatch from '../services/igwatch.js';
 import { aiAvailable } from '../services/radar.js';
 
 let running = null;
@@ -58,7 +61,14 @@ export function startScheduler() {
 export function startAutopilotJobs(tz) {
   const reachExpr = getSetting('reach_cron', '25 7 * * *');
   const ideasExpr = getSetting('ideas_cron', '50 6 * * *');
-  if (cron.validate(reachExpr)) cron.schedule(reachExpr, () => reach.syncAll().then(r => console.log('[reach]', r)).catch(e => console.error('[reach]', e.message)), { timezone: tz });
+  if (cron.validate(reachExpr)) cron.schedule(reachExpr, async () => {
+    await reach.syncAll().then(r => console.log('[reach]', r)).catch(e => console.error('[reach]', e.message));
+    if (igwatch.configured()) await igwatch.syncMedia({ limit: 25 }).catch(e => console.error('[instagram]', e.message)); // baseline for the reel radar
+  }, { timezone: tz });
+  // Publish queue (scheduled Shorts / Instagram posts) every 5 minutes; weekly summary Monday morning.
+  cron.schedule('*/5 * * * *', () => clips.processQueue().catch(e => console.error('[queue]', e.message)), { timezone: tz });
+  const weeklyExpr = getSetting('weekly_summary_cron', '10 8 * * 1');
+  if (cron.validate(weeklyExpr)) cron.schedule(weeklyExpr, () => portfolio.weeklySummary().catch(e => console.error('[weekly]', e.message)), { timezone: tz });
   if (cron.validate(ideasExpr) && getSetting('ideas_enabled', '1') === '1') cron.schedule(ideasExpr, () => runIdeas().catch(e => console.error('[ideas]', e.message)), { timezone: tz });
   console.log(`[scheduler] reach sync "${reachExpr}", daily ideas "${ideasExpr}" (${tz})`);
   if (listChannels('owned').length) setTimeout(() => reach.syncAll().catch(() => {}), 60_000);
