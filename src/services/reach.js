@@ -168,7 +168,7 @@ export function launchComparison(videoId, channelId, { isShort = null, maxDays =
 /** Everything the Analytics → Impressions & CTR tab needs. */
 export function channelSummary(channelId, { days = 28 } = {}) {
   const st = state(channelId);
-  const since = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+  const since = addDays(ptDay(Date.now()), -days); // report days are Pacific-time days
   const daily = db.prepare(`SELECT day, SUM(impressions) AS impressions, SUM(impressions * COALESCE(ctr, 0)) / NULLIF(SUM(CASE WHEN ctr IS NULL THEN 0 ELSE impressions END), 0) AS ctr
     FROM reach_daily WHERE channel_id = ? AND day >= ? GROUP BY day ORDER BY day`).all(channelId, since);
   const videos = db.prepare(`SELECT r.video_id, v.title, v.thumbnail, v.published_at, v.is_short, v.view_count, SUM(r.impressions) AS impressions,

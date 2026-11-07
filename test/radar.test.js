@@ -38,7 +38,7 @@ test('axes contract', async () => {
   const a = await ok('/radar/axes');
   assert.equal(Object.keys(a.axes).length, 8);
   assert.ok(Math.abs(Object.values(a.defaultWeights).reduce((x, y) => x + y, 0) - 1) < 1e-9);
-  assert.equal(a.axes.demand.backtest, false); assert.equal(a.axes.hook.backtest, false);
+  assert.equal(a.axes.demand.backtest, false); assert.equal(a.axes.hook.backtest, true, 'hook is backtested from local transcripts');
 });
 
 test('score variants without AI: deterministic axes, ranking, notes, saved', async () => {
@@ -146,7 +146,7 @@ test('AI axes via the Claude CLI: package scoring with thumbnails + hook, cached
       variants: [{ title: 'Nobody Warns You About Estate Recovery', thumbnailUrl: up.url }, { title: 'Estate Recovery Overview', thumbnailPath: up.path }, { title: 'Estate recovery basics' }] } });
     assert.equal(d.aiUsed, true, d.notes.join(';'));
     const [a, b, c] = ['Nobody Warns You About Estate Recovery', 'Estate Recovery Overview', 'Estate recovery basics'].map(t => d.variants.find(v => v.title === t));
-    assert.ok(a.axes.curiosity > 0 && a.axes.emotion === 82 && a.axes.thumbnail === 61 && a.axes.hook === 72);
+    assert.ok(a.axes.curiosity > 0 && a.axes.emotion === 82 && a.axes.thumbnail === 61 && a.axes.hook >= 40 && a.axes.hook < 90);
     assert.ok(b.axes.thumbnail === 61, 'thumbnailPath works');
     assert.equal(c.axes.thumbnail, null, 'no image → no thumbnail rating');
     assert.ok(a.ai.why && a.coverage === 1, 'all 8 axes scored');

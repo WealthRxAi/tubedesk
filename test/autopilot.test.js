@@ -234,6 +234,9 @@ test('daily ideas: signals → AI ideas → every title radar-scored → stored,
   }
   assert.ok(r.ideas.some(i => i.sources.some(s => s.type === 'search term bringing you viewers')), 'owner search terms used');
   assert.ok(r.ideas.some(i => i.sources.some(s => s.type === 'competitor breakout')), 'competitor breakouts used');
+  const q = r.ideas.flatMap(i => i.sources).find(s => s.type === 'viewer question');
+  assert.ok(q, 'unanswered viewer questions are a signal');
+  assert.ok(/\?/.test(q.text) && !/Great video|Thank you/.test(q.text), 'only questions: ' + q.text);
   assert.equal(r.ideas.find(i => i.format === 'short').format, 'short');
   assert.deepEqual(r.ideas.map(i => i.rank), [1, 2, 3]);
   assert.ok(await waitFor(() => received.some(m => /^Today's top ideas/.test(m.title) && /1\. /.test(m.message))), 'top 3 sent to the phone');

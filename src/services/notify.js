@@ -21,7 +21,7 @@ CREATE INDEX IF NOT EXISTS idx_notify_status ON notify_log(status, id);
 `);
 
 // Alert kinds that reach the phone by default. Everything else stays in the in-app Alerts list.
-export const DEFAULT_KINDS = ['radar_breakout', 'radar_competitor_breakout', 'radar_lagging', 'autopilot', 'autopilot_revert', 'ideas_daily', 'breakout'];
+export const DEFAULT_KINDS = ['radar_breakout', 'radar_competitor_breakout', 'radar_lagging', 'ig_breakout', 'autopilot', 'autopilot_revert', 'ideas_daily', 'clips', 'publish_failed', 'weekly_summary', 'breakout'];
 
 export function config() {
   return {
@@ -30,7 +30,7 @@ export function config() {
     ntfyServer: getSetting('notify_ntfy_server', 'https://ntfy.sh'),
     webhookUrl: getSetting('notify_webhook_url', ''),
     kinds: String(getSetting('notify_kinds', DEFAULT_KINDS.join(','))).split(',').map(s => s.trim()).filter(Boolean),
-    quiet: getSetting('notify_quiet', '22-7'), // local hours start-end; empty = never quiet
+    quiet: quietSpec(), // local hours start-end; empty or "off" = never quiet
     imessageAvailable: process.platform === 'darwin',
   };
 }
@@ -42,6 +42,12 @@ export function channelsConfigured(c = config()) {
   return out;
 }
 
+// getSetting treats '' as unset, but here an explicitly cleared value means "no quiet hours".
+function quietSpec() {
+  const row = db.prepare("SELECT value FROM settings WHERE key = 'notify_quiet'").get();
+  if (!row) return '22-7';
+  return /^off$/i.test(row.value.trim()) ? '' : row.value;
+}
 export function inQuietHours(date = new Date(), spec = config().quiet) {
   const m = /^(\d{1,2})-(\d{1,2})$/.exec(String(spec || '').trim());
   if (!m) return false;

@@ -71,6 +71,11 @@ async function runJob(id, fn) {
   running.set(id, p);
   return p;
 }
+export const isActive = id => running.has(id);
+/** At startup: jobs a previous run left queued/running can't finish any more. */
+export function recoverJobs() {
+  db.prepare("UPDATE publish_jobs SET status = 'failed', error = 'Interrupted by a restart — check the platform before publishing again.', finished_at = ? WHERE status IN ('queued', 'running')").run(new Date().toISOString());
+}
 /** Resolve when the job is finished (or timeoutMs elapses); returns the job either way. */
 export async function waitForJob(id, timeoutMs = 10 * 60 * 1000) {
   const p = running.get(id);
@@ -148,7 +153,7 @@ async function uploadResumable(v, log) {
     status: { privacyStatus: v.privacy, publishAt: v.publishAt || undefined, selfDeclaredMadeForKids: v.madeForKids, containsSyntheticMedia: v.containsSyntheticMedia || undefined },
   };
   const init = await fetch(`${YT_UPLOAD}/videos?uploadType=resumable&part=snippet,status&notifySubscribers=${v.notifySubscribers}`, {
-    method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json; charset=UTF-8', 'X-Upload-Content-Type': mime, 'X-Upload-Content-Length': String(size) }, body: JSON.stringify(body),
+    signal: AbortSignal.timeout(60_000), method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json; charset=UTF-8', 'X-Upload-Content-Type': mime, 'X-Upload-Content-Length': String(size) }, body: JSON.stringify(body),
   });
   if (!init.ok) {
     const j = await init.json().catch(() => ({}));
@@ -162,7 +167,8 @@ async function uploadResumable(v, log) {
   while (true) {
     const headers = { Authorization: `Bearer ${await getAccessToken(v.channelId)}`, 'Content-Type': mime, 'Content-Length': String(size - offset) };
     if (offset) headers['Content-Range'] = `bytes ${offset}-${size - 1}/${size}`;
-    const res = await fetch(session, { method: 'PUT', headers, body: fs.createReadStream(v.file, { start: offset }), duplex: 'half' }).catch(e => ({ ok: false, status: 0, netError: e }));
+    // Generous per-attempt limit (≥ 50 KB/s) so a dead connection can't hang the job forever; the loop resumes.
+    const res = await fetch(session, { method: 'PUT', headers, body: fs.createReadStream(v.file, { start: offset }), duplex: 'half', signal: AbortSignal.timeout(Math.max(15 * 60_000, (size - offset) / 50)) }).catch(e => ({ ok: false, status: 0, netError: e }));
     if (res.ok) {
       const j = await res.json();
       logApi({ api: 'data', endpoint: 'videos.insert', units: YT_UPLOAD_UNITS, cached: 0, ms: Date.now() - t0 });
@@ -175,7 +181,7 @@ async function uploadResumable(v, log) {
     }
     // Ask the session how much arrived, then resume from there.
     await new Promise(r => setTimeout(r, 1500 * attempt));
-    const probe = await fetch(session, { method: 'PUT', headers: { Authorization: `Bearer ${await getAccessToken(v.channelId)}`, 'Content-Range': `bytes */${size}`, 'Content-Length': '0' } }).catch(() => null);
+    const probe = await fetch(session, { signal: AbortSignal.timeout(60_000), method: 'PUT', headers: { Authorization: `Bearer ${await getAccessToken(v.channelId)}`, 'Content-Range': `bytes */${size}`, 'Content-Length': '0' } }).catch(() => null);
     if (probe && probe.ok) { const j = await probe.json(); logApi({ api: 'data', endpoint: 'videos.insert', units: YT_UPLOAD_UNITS, cached: 0, ms: Date.now() - t0 }); return j; }
     const range = probe?.headers.get('range');
     offset = range ? Number(range.split('-')[1]) + 1 : 0;
@@ -192,7 +198,7 @@ export function publishYouTube(params) {
     if (v.thumbnail) {
       try {
         const token = await getAccessToken(v.channelId);
-        const r = await fetch(`${YT_UPLOAD}/thumbnails/set?videoId=${videoId}`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': mimeFor(v.thumbnail) }, body: fs.readFileSync(v.thumbnail) });
+        const r = await fetch(`${YT_UPLOAD}/thumbnails/set?videoId=${videoId}`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': mimeFor(v.thumbnail) }, body: fs.readFileSync(v.thumbnail), signal: AbortSignal.timeout(120_000) });
         logApi({ api: 'data', endpoint: 'thumbnails.set', units: 50, cached: 0, ok: r.ok ? 1 : 0 });
         if (!r.ok) { const j = await r.json().catch(() => ({})); log(`thumbnail not set: ${j?.error?.message || r.status} (custom thumbnails need a verified YouTube account)`); }
         else log('thumbnail set');
@@ -215,14 +221,14 @@ export function instagramStatus() {
   const configured = !!(getSetting('ig_user_id') && getSetting('ig_access_token'));
   return { configured, username: getSetting('ig_username') || null, userId: getSetting('ig_user_id') || null, tokenRefreshedAt: getSetting('ig_token_refreshed_at') || null, publicUrl: publicUrlMode() };
 }
-async function ig(pathname, { method = 'GET', params = {} } = {}) {
+export async function ig(pathname, { method = 'GET', params = {} } = {}) {
   const token = getSetting('ig_access_token');
   if (!token) throw new Error('Instagram is not configured: add the account ID and access token in Settings → Instagram.');
   const u = new URL(`${IG_GRAPH}/${pathname}`);
   for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== null && v !== '') u.searchParams.set(k, String(v));
   u.searchParams.set('access_token', token);
   const t0 = Date.now();
-  const res = await fetch(u, { method });
+  const res = await fetch(u, { method, signal: AbortSignal.timeout(90_000) });
   const j = await res.json().catch(() => ({}));
   logApi({ api: 'instagram', endpoint: `${method} ${pathname.replace(/^\d+/, ':id')}`, units: 0, cached: 0, ms: Date.now() - t0, ok: res.ok ? 1 : 0 });
   if (!res.ok || j.error) {
@@ -244,7 +250,7 @@ export async function refreshInstagramToken({ force = false } = {}) {
   const last = Number(getSetting('ig_token_refreshed_at_ms', 0));
   if (!force && Date.now() - last < 30 * 86400e3) return { refreshed: false, reason: 'fresh' };
   const u = new URL(IG_REFRESH); u.searchParams.set('grant_type', 'ig_refresh_token'); u.searchParams.set('access_token', token);
-  const res = await fetch(u); const j = await res.json().catch(() => ({}));
+  const res = await fetch(u, { signal: AbortSignal.timeout(60_000) }); const j = await res.json().catch(() => ({}));
   if (!res.ok || !j.access_token) return { refreshed: false, reason: j?.error?.message || `status ${res.status}` };
   setSetting('ig_access_token', j.access_token); setSetting('ig_token_refreshed_at', new Date().toISOString()); setSetting('ig_token_refreshed_at_ms', String(Date.now()));
   return { refreshed: true, expiresInDays: Math.round((j.expires_in || 0) / 86400) };

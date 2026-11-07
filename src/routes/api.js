@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { db, getSetting, setSetting, allSettings, DATA_DIR } from '../db.js';
 import { quotaToday, quotaHistory, cacheClear, YouTubeError } from '../youtube/client.js';
-import { authUrl, consumeState, exchangeCode, fetchEmail, saveTokens, clearTokens } from '../youtube/oauth.js';
+import { authUrl, consumeState, exchangeCode, fetchEmail, saveTokens, clearTokens, isAuthorized } from '../youtube/oauth.js';
 import { ytGet } from '../youtube/client.js';
 import * as ch from '../services/channels.js';
 import * as an from '../services/analytics.js';
@@ -25,6 +25,11 @@ import * as notifier from '../services/notify.js';
 import * as reach from '../services/reach.js';
 import * as autopilot from '../services/autopilot.js';
 import * as ideas from '../services/ideas.js';
+import * as clips from '../services/clips.js';
+import * as slots from '../services/slots.js';
+import * as portfolio from '../services/portfolio.js';
+import * as transcribe from '../services/transcribe.js';
+import * as igwatch from '../services/igwatch.js';
 import { runDailySnapshot } from '../jobs/scheduler.js';
 
 export const api = Router();
@@ -37,7 +42,7 @@ api.get('/status', w(async (req, res) => {
   res.json({
     configured: { apiKey: !!s.yt_api_key, oauth: !!(s.google_client_id && s.google_client_secret) },
     ai: await ai.status(), quota: quotaToday(), channels: ch.listChannels().length,
-    lastSnapshot: s.last_snapshot ? JSON.parse(s.last_snapshot) : null, version: '1.4.0', dataDir: DATA_DIR,
+    lastSnapshot: s.last_snapshot ? JSON.parse(s.last_snapshot) : null, version: '1.5.0', dataDir: DATA_DIR,
   });
 }));
 api.get('/settings', (req, res) => {
@@ -72,14 +77,36 @@ api.get('/publish/jobs/:id', w(async (req, res) => {
   const job = req.query.wait === '1' ? await pub.waitForJob(req.params.id, Number(req.query.timeout || 600) * 1000) : pub.getJob(req.params.id);
   job ? res.json(job) : res.status(404).json({ error: 'job not found' });
 }));
+// "publishAt": "best" picks the channel's next best slot (format: "short" | "long" decides which history to use).
+function resolveBest(body) {
+  if (body?.publishAt !== 'best') return body;
+  const channelId = body.channelId || ch.listChannels('owned').find(c => isAuthorized(c.id))?.id;
+  if (!channelId) throw new Error('publishAt "best" needs a connected owned channel.');
+  const slot = slots.bestSlots(channelId, { format: body.format || null, count: 1 })[0];
+  if (!slot) throw new Error('No free slot found in the next 10 days.');
+  const { format, ...rest } = body;
+  return { ...rest, channelId, privacy: 'private', publishAt: slot.at, _slot: slot }; // YouTube flips it public at publishAt
+}
 api.post('/publish/youtube', w(async (req, res) => {
   let job;
-  try { job = pub.publishYouTube(req.body || {}); } catch (e) { return res.status(400).json({ error: e.message }); }
+  try { req.body = resolveBest(req.body || {}); job = pub.publishYouTube(req.body); } catch (e) { return res.status(400).json({ error: e.message }); }
   if (req.query.wait === '1' || req.body?.wait === true) job = await pub.waitForJob(job.id, Number(req.query.timeout || 600) * 1000);
+  if (req.body._slot) job = { ...job, slot: req.body._slot };
   res.status(job.status === 'failed' ? 502 : 200).json(job);
 }));
 api.post('/publish/instagram', w(async (req, res) => {
   let job;
+  // Instagram has no scheduling API: a future publishAt (or "best") goes into TubeDesk's publish queue.
+  if (req.body?.publishAt) {
+    try {
+      pub.validateInstagram(req.body);
+      let at = req.body.publishAt, slot = null;
+      if (at === 'best') { const owned = ch.listChannels('owned')[0]; slot = owned ? slots.bestSlots(owned.id, { format: 'short', count: 1 })[0] : null; at = slot?.at || new Date(Date.now() + 3600e3).toISOString(); }
+      if (Number.isNaN(Date.parse(at))) throw new Error('publishAt must be an ISO-8601 date-time or "best".');
+      const { publishAt, wait, ...params } = req.body;
+      return res.json({ queued: clips.enqueue({ platform: 'instagram', params, runAt: at, publishAt: at }), slot });
+    } catch (e) { return res.status(400).json({ error: e.message }); }
+  }
   try { job = pub.publishInstagram(req.body || {}); } catch (e) { return res.status(400).json({ error: e.message }); }
   if (req.query.wait === '1' || req.body?.wait === true) job = await pub.waitForJob(job.id, Number(req.query.timeout || 900) * 1000);
   res.status(job.status === 'failed' ? 502 : 200).json(job);
@@ -348,6 +375,33 @@ api.get('/ideas/:channel', (req, res) => res.json(ideas.list(req.params.channel,
 api.post('/ideas/:channel/run', w(async (req, res) => res.json(await ideas.runDaily(req.params.channel, { count: Number(req.body?.count || getSetting('ideas_count', 8)), notifyPhone: req.body?.notify !== false }))));
 api.post('/ideas/item/:id/status', (req, res) => { try { res.json({ updated: ideas.setStatus(Number(req.params.id), req.body?.status) }); } catch (e) { res.status(400).json({ error: e.message }); } });
 
+// ---------- Shorts from breakouts + publish queue + best slots ----------
+api.get('/shorts/status', (req, res) => res.json({ engine: transcribe.engineStatus(), settings: clips.settings(), instagram: pub.instagramStatus().configured }));
+api.get('/shorts/:channel', (req, res) => res.json(clips.listClips(req.params.channel, Number(req.query.limit || 60))));
+api.post('/shorts/make/:video', w(async (req, res) => {
+  const b = req.body || {};
+  clips.preflight(req.params.video); // fail fast with a clear message even when not waiting
+  const p = clips.makeClips(req.params.video, { count: b.count ? Number(b.count) : undefined, autoPublish: b.autoPublish ?? null, force: b.force === true });
+  if (req.query.wait === '1' || b.wait === true) return res.json(await p);
+  p.catch(() => {});
+  res.json({ started: true });
+}));
+api.post('/shorts/clip/:id/schedule', (req, res) => res.json(clips.schedule([Number(req.params.id)])));
+api.post('/shorts/clip/:id/publish-now', w(async (req, res) => res.json(await clips.publishNow(Number(req.params.id)))));
+api.post('/shorts/clip/:id/cancel', w(async (req, res) => res.json(await clips.cancel(Number(req.params.id)))));
+api.get('/publish-queue', (req, res) => res.json(clips.queue({ channelId: req.query.channel || null })));
+api.post('/publish-queue/run', w(async (req, res) => res.json(await clips.processQueue())));
+api.get('/slots/:channel', (req, res) => res.json({ next: slots.bestSlots(req.params.channel, { format: req.query.format || null, count: Number(req.query.count || 5) }), grid: slots.slotGrid(req.params.channel, { format: req.query.format || null }) }));
+api.get('/transcripts/:video', (req, res) => { const t = transcribe.cached(req.params.video); t ? res.json(t) : res.status(404).json({ error: 'no transcript yet' }); });
+api.post('/transcripts/:video', w(async (req, res) => { const t = await transcribe.transcriptFor(req.params.video, { allowCaptions: req.body?.captions === true }); t ? res.json(t) : res.status(404).json({ error: 'No source file and captions not allowed/available.' }); }));
+
+// ---------- all channels ----------
+api.get('/portfolio', w(async (req, res) => res.json(await portfolio.overview())));
+api.post('/portfolio/weekly-summary', w(async (req, res) => res.json(await portfolio.weeklySummary({ send: req.body?.send !== false }))));
+
+// ---------- Instagram reels ----------
+api.post('/instagram/sync', w(async (req, res) => res.json(await igwatch.syncMedia({ limit: Number(req.body?.limit || 25) }))));
+
 // ---------- browser extension ----------
 // Watch page: public stats for any video + outlier context from a cheap sample of that channel's recent uploads (≤ 3 units when uncached).
 // Recent uploads of a channel (≤50, 1 quota unit for the playlist page + 1 for stats; cached 6h).
@@ -563,6 +617,13 @@ VIRALITY RADAR (score before you publish; watch after)
   POST /api/radar/watch/run                     hourly launch-curve check of new uploads (runs on its own every hour)
   GET  /api/radar/watch/:channelId              velocity index vs the usual launch curve, status, alerts
   GET  /api/radar/history/:channelId            scored ideas vs how they actually did
+
+SHORTS, SLOTS, ALL CHANNELS
+  POST /api/shorts/make/:videoId?wait=1          transcribe locally → pick moments → radar-score → cut 9:16 with captions → schedule
+  GET  /api/shorts/:channelId                    clips with status, radar score and their publish-queue items
+  GET  /api/slots/:channelId?format=short        next best publish slots learned from your uploads
+  POST /api/publish/youtube {"publishAt":"best"} schedule into the next best slot (Instagram: queued locally)
+  GET  /api/portfolio                            every owned channel (+ Instagram) on one board
 
 AUTOPILOT, IDEAS, CTR, PHONE
   GET  /api/ideas/:channelId                    today's (and recent) radar-scored video ideas with their evidence

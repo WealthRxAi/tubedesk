@@ -39,6 +39,7 @@ A self-hosted YouTube channel desk for the channels you own: analytics, keyword 
 | **Comments** | Inbox with unanswered/question/mention filters, question clusters, word cloud, AI reply drafts, reply templates, post replies, transparent giveaway draw, CSV | Data API |
 | **Scores** | Channel Score (consistency, packaging health, hit rate, engagement, growth) with the weakest signal called out; per-video Score (packaging × performance vs channel median × engagement); keyword Demand Index — all with components and formulas visible | Local data, suggest |
 | **Browser extension** | On youtube.com: stats panel under every video (views, views/hour or /day, **estimated video revenue**, outlier × vs that channel's median, velocity, likes/comments rates, views ÷ subs, SEO score, length, publish time, tags + copy), a channel card with **estimated monthly/yearly revenue**, uploads/week, median views and recent breakouts; a full channel panel on any channel page with its recent uploads ranked by outlier ×; **chips on every thumbnail** across home, search, related and channel grids (views, views/day, × vs channel average, est. revenue); one-click track-as-competitor and save-to-board; demand panel on search results; popup with your channels' today numbers and alerts | Local TubeDesk server |
+| **Shorts, best times, all channels** | Breakouts cut into vertical Shorts automatically: local transcription (whisper.cpp, free), AI-picked self-contained moments, every title radar-scored, 9:16 render with word-timed captions and an on-screen hook, scheduled into your best slots on YouTube and Instagram; publish times learned from your own history (`"publishAt":"best"`); every owned channel + Instagram on one board with a weekly summary to your phone; Instagram reels paced against your usual reel with breakout alerts; unanswered viewer questions feed the daily idea list | Local whisper.cpp + ffmpeg, Data API, Analytics API, Instagram API, AI |
 | **System** | Quota meter and history, response cache, daily scheduler, earnings and valuation scenario calculators | — |
 
 Everything that is an estimate or heuristic is labeled as such in the UI. Nothing asserts proprietary scores, predicted CTR, or third-party revenue figures. The one prediction TubeDesk makes — the radar's views multiplier — is fitted on your own channel's history, shown as a range, and graded on newer videos the model never saw.
@@ -46,7 +47,7 @@ Everything that is an estimate or heuristic is labeled as such in the UI. Nothin
 ## Requirements
 
 - Node.js 20+ (Claude Code already needs this)
-- ffmpeg (optional, for the media pipeline) and cloudflared (optional, for Instagram publishing) — both free via Homebrew
+- ffmpeg (optional, for the media pipeline), whisper.cpp (optional, for Shorts and hook scoring) and cloudflared (optional, for Instagram publishing) — all free via Homebrew: `brew install ffmpeg whisper-cpp cloudflared`
 - A Google Cloud project (free) with **YouTube Data API v3** and **YouTube Analytics API** enabled
 - Claude Code on PATH for the AI features (`claude --version` works), or an Anthropic API key
 
@@ -110,7 +111,7 @@ Rate a video package before you publish, learn what actually moves views on *you
 | Title craft | the Packaging title checklist | yes |
 | Curiosity, Emotion | AI rating of title + thumbnail together | yes |
 | Thumbnail | AI vision rating (focal point, 160 px legibility, contrast, complements the title) | yes (current thumbnail) |
-| Hook | AI rating of the opening | no — old transcripts cost 200 quota units each |
+| Hook | AI rating of the opening | yes — from local whisper.cpp transcripts of your source files (free), plus up to `radar_hook_captions` (10) caption downloads per calibration for older uploads |
 
 The composite is a weighted mean of the axes that could be scored. It maps to **predicted views ÷ your usual views** (the median of your 10 nearest-in-time same-format uploads), with an 80% range and P(≥ 2×). Every weak axis comes with a concrete fix. Scored ideas are saved and linked automatically to the upload with the matching title, so **History** shows prediction vs outcome.
 
@@ -134,9 +135,33 @@ Settings keys: `radar_enabled`, `radar_watch_cron` (`7 * * * *`), `radar_calibra
 
 To act it writes four honest alternative titles (the description is the source of truth), builds thumbnail candidates (your thumbnail bank, or frames cut from the source video with bold text — automatic for videos published through TubeDesk), scores everything on the radar against the current package in one batch, and swaps in a winner that beats it by `autopilot_min_gain` (8) points through `videos.update` / `thumbnails.set` (100 quota units). One swap per video; never touches a video with your own staged edits; Shorts excluded by default. After 48 h it compares CTR before vs after the change and reverts automatically if CTR fell by more than 15%. Modes: `auto` (default), `suggest` (stage it and ping you to approve), `off`. Every change is logged with before/after and a one-click undo.
 
-**Daily ideas** (06:50). Evidence first: competitor uploads at ≥ 2× their channel's usual views in the last 30 days, your own ≥ 1.75× winners, the real YouTube search terms that brought viewers to you (owner Analytics), and new autocomplete suggestions around your strongest topics. The AI turns that into ideas (three titles, thumbnail text, a hook, format) that must cite their evidence; every title is radar-scored, near-repeats of the last 14 days are dropped, and the top three go to your phone. Dashboard shows today's top three.
+**Daily ideas** (06:50). Evidence first: competitor uploads at ≥ 2× their channel's usual views in the last 30 days, your own ≥ 1.75× winners, the real YouTube search terms that brought viewers to you (owner Analytics), new autocomplete suggestions around your strongest topics, and the questions your viewers keep asking in comments (last 30 days, not yet answered by you, grouped by topic; `ideas_comments`). The AI turns that into ideas (three titles, thumbnail text, a hook, format) that must cite their evidence; every title is radar-scored, near-repeats of the last 14 days are dropped, and the top three go to your phone. Dashboard shows today's top three.
 
-**Phone alerts.** Breakouts, lagging uploads, autopilot changes/reverts and the idea list. Channels (all free): **iMessage** sent by the Mac's own Messages app (`notify_imessage_to`; first send asks macOS for permission to control Messages), **ntfy** push app (`notify_ntfy_topic`), or any **webhook** (`notify_webhook_url`; Slack/Discord-compatible body). Quiet hours (`notify_quiet`, default `22-7`) hold messages and send them as one digest afterwards. Kinds: `notify_kinds`.
+**Phone alerts.** Breakouts (YouTube and Instagram), lagging uploads, autopilot changes/reverts, the idea list, Shorts cut and scheduled, failed scheduled uploads and the Monday summary. Channels (all free): **iMessage** sent by the Mac's own Messages app (`notify_imessage_to`; first send asks macOS for permission to control Messages), **ntfy** push app (`notify_ntfy_topic`), or any **webhook** (`notify_webhook_url`; Slack/Discord-compatible body). Quiet hours (`notify_quiet`, default `22-7`; `off` or empty for none) hold messages and send them as one digest afterwards. Kinds: `notify_kinds`.
+
+## Shorts from breakouts, best publish times, all channels
+
+**Shorts from breakouts** (Virality radar → Shorts). When one of your long-form uploads breaks out on the live watch and TubeDesk has its source file (automatic for videos published through TubeDesk; otherwise link it under Autopilot → Source file), it:
+1. transcribes the file on your Mac with **whisper.cpp** (`brew install whisper-cpp`; the free `small.en` model, ~470 MB, downloads itself on first use into `data/models`; `whisper_model_name` picks another),
+2. asks the AI for the strongest self-contained moments (`clips_min_seconds`–`clips_max_seconds`, default 15–58 s), snapped to word boundaries,
+3. scores every candidate title on the radar as a Short and keeps the best `clips_count` (3),
+4. renders each as 1080×1920 with word-timed captions and a 3-second on-screen hook, plus a cover frame,
+5. schedules them into your next best **Shorts** slots, one per slot: YouTube uploads 90 minutes early as private with `publishAt` (YouTube flips it public), Instagram posts at the slot from TubeDesk's publish queue (Instagram has no scheduling API). Uploads are spread across days so the 1,600-unit YouTube upload never exhausts the daily quota; if it would, the upload moves one day.
+
+`clips_publish`: `auto` (default) or `review` (cut, then wait for you). `clips_platforms`: `youtube,instagram`. Every clip can be previewed, scheduled, published now or cancelled in the app. An upload interrupted by a restart is never re-sent automatically (a duplicate public post is worse than a missed one); you get a failed item and a "Publish now" button.
+
+**Best publish times.** TubeDesk fits your own history — views ÷ local baseline by local weekday and 3-hour block, shrunk toward neutral where data is thin — and returns the next free slots at least 20 h apart, never midnight–6 am, skipping slots already taken by scheduled uploads. Use it anywhere with `"publishAt": "best"` (YouTube and Instagram publish endpoints), `GET /api/slots/:channelId?format=short`, or the `best_publish_time` MCP tool. Under 8 uploads it falls back to `default_publish_hour` (15:00) in `timezone`.
+
+**All channels** (Desk → All channels). Every owned channel on one board: views and subscribers this week vs last (from daily snapshots), the latest upload's pace and status, 28-day CTR, monetization progress, open alerts, what the autopilot did, today's top idea and queued Shorts — plus Instagram. The same summary goes to your phone every Monday 08:10 (`weekly_summary_cron`).
+
+**Instagram reels on the radar.** With Instagram connected, the hourly watch also pulls your reels from the last 3 days (`radar_watch_ig_days`) with their insights (`views`, reach, shares, saves) and paces each one against your earlier reels at the same age (reels are front-loaded, so until hourly history exists the estimate uses a flatter curve, `radar_curve_exponent_ig` 0.35); ≥ 2× sends a breakout alert (3× while the baseline is only an estimate). Insights need the `instagram_business_manage_insights` permission on your token.
+
+```bash
+curl -X POST 'localhost:4949/api/shorts/make/VIDEO_ID?wait=1'
+curl 'localhost:4949/api/slots/UC…?format=short&count=5'
+curl localhost:4949/api/portfolio
+curl -X POST 'localhost:4949/api/publish/youtube?wait=1' -H 'content-type: application/json' -d '{"file":"/abs/v.mp4","title":"…","publishAt":"best","format":"long"}'
+```
 
 ## Publishing (YouTube + Instagram) — built for AI agents
 

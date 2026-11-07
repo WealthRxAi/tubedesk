@@ -108,7 +108,7 @@ window.TD = (() => {
   // ---------- router / nav ----------
   const NAV = [
     { group: 'Desk' },
-    { path: '/', label: 'Dashboard' }, { path: '/channels', label: 'Channels' }, { path: '/library', label: 'Video library' }, { path: '/analytics', label: 'Analytics', owned: true },
+    { path: '/', label: 'Dashboard' }, { path: '/portfolio', label: 'All channels' }, { path: '/channels', label: 'Channels' }, { path: '/library', label: 'Video library' }, { path: '/analytics', label: 'Analytics', owned: true },
     { group: 'Research' },
     { path: '/keywords', label: 'Keywords' }, { path: '/outliers', label: 'Outliers' }, { path: '/trending', label: 'Trending & niches' }, { path: '/competitors', label: 'Competitors' }, { path: '/boards', label: 'Boards & blueprints' },
     { group: 'Create' },

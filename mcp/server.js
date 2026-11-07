@@ -6,7 +6,7 @@
 import readline from 'node:readline';
 
 const BASE = (process.env.TUBEDESK_URL || 'http://localhost:4949').replace(/\/$/, '');
-const VERSION = '1.4.0';
+const VERSION = '1.5.0';
 
 async function call(method, path, body) {
   const res = await fetch(BASE + path, { method, headers: body ? { 'content-type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
@@ -31,7 +31,7 @@ const TOOLS = [
     inputSchema: { type: 'object', required: ['file', 'title'], properties: {
       file: { type: 'string', description: 'Absolute path to an MP4/MOV on this machine' }, title: { type: 'string', maxLength: 100 }, description: { type: 'string', maxLength: 5000 },
       tags: { type: 'array', items: { type: 'string' } }, privacy: { type: 'string', enum: ['private', 'unlisted', 'public'], default: 'private' },
-      publishAt: { type: 'string', description: 'ISO-8601 future time to schedule (privacy must be private)' }, thumbnail: { type: 'string', description: 'Absolute path to JPG/PNG ≤2 MB' },
+      publishAt: { type: 'string', description: 'ISO-8601 future time to schedule (privacy must be private), or "best" for the channel next best slot' }, format: { type: 'string', enum: ['long', 'short'], description: 'With publishAt "best": which history to learn the slot from' }, thumbnail: { type: 'string', description: 'Absolute path to JPG/PNG ≤2 MB' },
       playlistId: { type: 'string' }, categoryId: { type: 'string' }, language: { type: 'string' }, madeForKids: { type: 'boolean', default: false }, notifySubscribers: { type: 'boolean', default: true },
       containsSyntheticMedia: { type: 'boolean', description: 'true for AI-generated or altered realistic content (YouTube disclosure)' }, channelId: { type: 'string' }, wait: { type: 'boolean', default: true } } } },
   { name: 'publish_instagram', description: 'Publish a Reel (MP4/MOV, 9:16) or an image (JPG/PNG) from this machine to the connected Instagram professional account. Free. Returns the job with the permalink when wait=true (default).',
@@ -61,6 +61,12 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: { channelId: { type: 'string' }, action: { type: 'string', enum: ['list', 'run', 'revert'], default: 'list' }, videoId: { type: 'string' }, actionId: { type: 'integer' } } } },
   { name: 'ctr_report', description: 'Impressions and impressions CTR per video and per day from the YouTube Reporting API (daily, ~2-day delay), the channel\'s usual first-days CTR, and high-impression videos with low CTR (packaging fix candidates). sync=true pulls new reports first.',
     inputSchema: { type: 'object', properties: { channelId: { type: 'string' }, days: { type: 'integer', default: 28 }, sync: { type: 'boolean', default: false } } } },
+  { name: 'make_shorts', description: 'Cut vertical Shorts from one of your long-form uploads: transcribes its source file locally (whisper.cpp), picks self-contained moments, scores each title on the virality radar, renders 1080×1920 clips with word-timed captions and an on-screen hook, and (autoPublish, default from settings) schedules them into your best Shorts slots on YouTube and Instagram. Runs automatically when an upload breaks out; use this to run it on demand. Takes a few minutes.',
+    inputSchema: { type: 'object', required: ['videoId'], properties: { videoId: { type: 'string' }, count: { type: 'integer', default: 3 }, autoPublish: { type: 'boolean' } } } },
+  { name: 'portfolio', description: 'Every channel you own (+ Instagram) on one board: views and subs this week vs last, the latest upload\'s pace and CTR, monetization progress, open alerts, autopilot activity, today\'s top idea, queued Shorts. weekly=true also returns (and phones) the weekly summary text.',
+    inputSchema: { type: 'object', properties: { weekly: { type: 'boolean', default: false } } } },
+  { name: 'best_publish_time', description: 'Next best publish slots for a channel, learned from how your own uploads performed by local weekday and 3-hour block (shrunk toward neutral when data is thin). Use format "short" for Shorts. To schedule straight into the best slot, call publish_youtube with publishAt "best".',
+    inputSchema: { type: 'object', properties: { channelId: { type: 'string' }, format: { type: 'string', enum: ['long', 'short'] }, count: { type: 'integer', default: 3 } } } },
   { name: 'tubedesk_api', description: 'Call any TubeDesk REST endpoint (GET /api/... or POST /api/... with a JSON body). See GET /api/agent for the route list.',
     inputSchema: { type: 'object', required: ['path'], properties: { method: { type: 'string', enum: ['GET', 'POST', 'PUT', 'DELETE'], default: 'GET' }, path: { type: 'string', description: 'e.g. /api/channels' }, body: { type: 'object' } } } },
 ];
@@ -98,6 +104,9 @@ async function runTool(name, a = {}) {
       return call('GET', `/api/autopilot/${encodeURIComponent(a.channelId || await firstOwned())}`);
     }
     case 'ctr_report': { const id = a.channelId || await firstOwned(); if (a.sync) await call('POST', `/api/reach/${encodeURIComponent(id)}/sync`, {}); return call('GET', `/api/reach/${encodeURIComponent(id)}?days=${a.days || 28}`); }
+    case 'make_shorts': return call('POST', `/api/shorts/make/${encodeURIComponent(a.videoId)}?wait=1`, { count: a.count, autoPublish: a.autoPublish });
+    case 'portfolio': return a.weekly ? call('POST', '/api/portfolio/weekly-summary', { send: true }) : call('GET', '/api/portfolio');
+    case 'best_publish_time': { const id = a.channelId || await firstOwned(); return call('GET', `/api/slots/${encodeURIComponent(id)}?count=${a.count || 3}${a.format ? '&format=' + a.format : ''}`); }
     case 'tubedesk_api': { const p = String(a.path || ''); if (!p.startsWith('/api/')) throw new Error('path must start with /api/'); return call(a.method || 'GET', p, a.body); }
     default: throw new Error(`unknown tool ${name}`);
   }
