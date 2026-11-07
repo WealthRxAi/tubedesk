@@ -16,12 +16,17 @@ function vid(chId, i) {
   return { id, channelId: chId, title: titles[i % titles.length] + (i >= titles.length ? ` (part ${Math.floor(i / titles.length) + 1})` : ''), short, views, likes: Math.round(views * 0.04), comments: Math.round(views * 0.004), pub, duration: short ? 'PT48S' : `PT${8 + (i % 6)}M${12 + i}S` };
 }
 function videoResource(v) {
-  return { id: v.id, snippet: { publishedAt: v.pub, channelId: v.channelId, channelTitle: CH[v.channelId].title, title: v.title, description: `About ${v.title}.\n\n0:00 Intro\n1:10 The rule\n4:00 Example\n\nhttps://example.org/source`, tags: ['medicaid', 'aging parents', 'caregiving'], categoryId: '27', defaultLanguage: 'en', liveBroadcastContent: 'none', thumbnails: { high: { url: `${THUMB_BASE}/vi/${v.id}/hqdefault.jpg` }, maxres: { url: `${THUMB_BASE}/vi/${v.id}/maxresdefault.jpg` } } }, statistics: { viewCount: String(v.views), likeCount: String(v.likes), commentCount: String(v.comments) }, contentDetails: { duration: v.duration }, status: { privacyStatus: 'public', selfDeclaredMadeForKids: false } };
+  return { id: v.id, snippet: { publishedAt: v.pub, channelId: v.channelId, channelTitle: CH[v.channelId].title, title: TITLE_OVERRIDES[v.id] || v.title, description: `About ${v.title}.\n\n0:00 Intro\n1:10 The rule\n4:00 Example\n\nhttps://example.org/source`, tags: ['medicaid', 'aging parents', 'caregiving'], categoryId: '27', defaultLanguage: 'en', liveBroadcastContent: 'none', thumbnails: { high: { url: `${THUMB_BASE}/vi/${v.id}/hqdefault.jpg` }, maxres: { url: `${THUMB_BASE}/vi/${v.id}/maxresdefault.jpg` } } }, statistics: { viewCount: String(v.views), likeCount: String(v.likes), commentCount: String(v.comments) }, contentDetails: { duration: v.duration }, status: { privacyStatus: 'public', selfDeclaredMadeForKids: false } };
 }
 function channelResource(c) {
   return { id: c.id, snippet: { title: c.title, customUrl: c.handle, description: `${c.title} — money and legal help for families caring for aging parents.`, country: c.country, publishedAt: '2025-06-01T00:00:00Z', thumbnails: { high: { url: `https://yt3.ggpht.com/${c.id}=s240` } } }, statistics: { subscriberCount: String(c.subs), viewCount: String(c.views), videoCount: String(c.videos) }, contentDetails: { relatedPlaylists: { uploads: 'UU' + c.id.slice(2) } }, brandingSettings: { channel: { country: c.country } } };
 }
 export const calls = [];
+// Reporting API state: tests can change how many daily reports exist and the CTR each video gets.
+// Title changes made through videos.update persist, like on YouTube (tests can also set them to simulate the owner).
+export const TITLE_OVERRIDES = {};
+const ptDay = ms => new Date(ms).toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+export const REPORTING = { jobs: [], days: 40, ctr: (i) => (i % 5 === 0 ? 8.5 : i === 1 ? 1.6 : 4.2) };
 // Video thumbnails are served by the mock itself so tests never touch the network.
 let THUMB_BASE = 'https://i.ytimg.com';
 // 1×1 white JPEG
@@ -34,6 +39,34 @@ export function startMock(port = 0) {
     calls.push({ path: u.pathname, q, method: req.method, auth: req.headers.authorization || null });
     const json = (o, code = 200) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(o)); };
     if (u.pathname.startsWith('/vi/')) { res.writeHead(200, { 'content-type': 'image/jpeg' }); return res.end(JPEG); }
+    // --- YouTube Reporting API (reach reports: impressions + CTR) ---
+    if (u.pathname.startsWith('/reporting/')) {
+      if (!req.headers.authorization) return json({ error: { message: 'Login Required' } }, 401);
+      if (u.pathname === '/reporting/v1/jobs' && req.method === 'POST') { let b = ''; req.on('data', d => b += d); return req.on('end', () => { const j = JSON.parse(b); REPORTING.jobs.push({ id: 'job-reach-1', reportTypeId: j.reportTypeId, name: j.name, createTime: new Date().toISOString() }); json(REPORTING.jobs.at(-1)); }); }
+      if (u.pathname === '/reporting/v1/jobs') return json({ jobs: REPORTING.jobs });
+      if (/^\/reporting\/v1\/jobs\/[^/]+\/reports$/.test(u.pathname)) {
+        const reports = [];
+        for (let d = 1; d <= REPORTING.days; d++) {
+          const day = ptDay(Date.now() - d * 86400000);
+          reports.push({ id: 'rep-' + day, jobId: 'job-reach-1', startTime: day + 'T07:00:00Z', endTime: day + 'T07:00:00Z', createTime: new Date().toISOString(), downloadUrl: `${THUMB_BASE}/reporting/download/${day}` });
+        }
+        // two pages, to exercise pagination
+        if (!q.pageToken) return json({ reports: reports.slice(0, 5), nextPageToken: reports.length > 5 ? 'p2' : undefined });
+        return json({ reports: reports.slice(5) });
+      }
+      if (u.pathname.startsWith('/reporting/download/')) {
+        const day = u.pathname.split('/').pop();
+        const lines = ['date,channel_id,video_id,live_or_on_demand,subscribed_status,country_code,video_thumbnail_impressions,video_thumbnail_impressions_ctr'];
+        for (let i = 0; i < 24; i++) {
+          const v = vid('UCowner00000000000000001', i);
+          if (ptDay(Date.parse(v.pub)) > day) continue;
+          const ctr = REPORTING.ctr(i, v);
+          lines.push(`${day.replace(/-/g, '')},UCowner00000000000000001,${v.id},on_demand,subscribed,US,${600 + i * 10},${ctr}`);
+          lines.push(`${day.replace(/-/g, '')},UCowner00000000000000001,${v.id},on_demand,unsubscribed,US,${400 + i * 10},${ctr}`);
+        }
+        res.writeHead(200, { 'content-type': 'text/csv' }); return res.end(lines.join('\n'));
+      }
+    }
     // --- publishing mocks: YouTube resumable upload + thumbnails, Instagram Graph API ---
     if (u.pathname.endsWith('/upload/videos') || u.pathname.endsWith('/upload/videos/session')) {
       if (u.pathname.endsWith('/session')) { let n = 0; req.on('data', d => n += d.length); return req.on('end', () => { calls.at(-1).bytes = n; json({ id: 'NEWVID00001', status: { uploadStatus: 'uploaded', privacyStatus: 'private' } }); }); }
@@ -84,7 +117,7 @@ export function startMock(port = 0) {
       return json({ items, nextPageToken: (page + 1) * 50 < n ? String(page + 1) : undefined });
     }
     if (u.pathname.endsWith('/videos')) {
-      if (req.method === 'PUT') { let b = ''; req.on('data', d => b += d); return req.on('end', () => json(JSON.parse(b))); }
+      if (req.method === 'PUT') { let b = ''; req.on('data', d => b += d); return req.on('end', () => { const j = JSON.parse(b); if (j.snippet?.title) TITLE_OVERRIDES[j.id] = j.snippet.title; json(j); }); }
       if (q.chart) { const items = []; for (let i = 0; i < 20; i++) items.push(videoResource(vid('UCcomp000000000000000002', i))); return json({ items }); }
       const ids = q.id.split(','); const items = [];
       for (const id of ids) { for (const chId of Object.keys(CH)) for (let i = 0; i < 60; i++) { const v = vid(chId, i); if (v.id === id) items.push(videoResource(v)); } }

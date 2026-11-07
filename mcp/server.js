@@ -6,7 +6,7 @@
 import readline from 'node:readline';
 
 const BASE = (process.env.TUBEDESK_URL || 'http://localhost:4949').replace(/\/$/, '');
-const VERSION = '1.3.0';
+const VERSION = '1.4.0';
 
 async function call(method, path, body) {
   const res = await fetch(BASE + path, { method, headers: body ? { 'content-type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
@@ -55,6 +55,12 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: { channelId: { type: 'string' }, run: { type: 'boolean', default: false } } } },
   { name: 'radar_calibrate', description: 'Backtest the radar on the channel\'s own history (plus tracked competitors) and store calibrated weights. Reports holdout accuracy (Spearman, top-quartile hit rate vs base rate). AI features are cached, so reruns are cheap.',
     inputSchema: { type: 'object', properties: { channelId: { type: 'string' }, aiLimit: { type: 'integer', default: 60 }, ai: { type: 'boolean', default: true } } } },
+  { name: 'daily_ideas', description: 'Today\'s radar-scored video ideas for a channel, each with 3 title options ranked on the virality radar, thumbnail text, a hook and the evidence it came from (competitor breakouts, your winners, real search terms, new autocomplete suggestions). run=true builds a fresh list first (AI; ~1–3 minutes).',
+    inputSchema: { type: 'object', properties: { channelId: { type: 'string' }, run: { type: 'boolean', default: false }, count: { type: 'integer', default: 8 } } } },
+  { name: 'autopilot', description: 'Radar autopilot for lagging uploads. action "list" (default): every title/thumbnail change made or suggested, with diagnosis, before/after radar scores and the CTR grade. action "run" with videoId: diagnose → write truthful alternatives → score on the radar → swap in a clear winner (respects autopilot_mode auto/suggest/off). action "revert" with actionId: restore the original packaging.',
+    inputSchema: { type: 'object', properties: { channelId: { type: 'string' }, action: { type: 'string', enum: ['list', 'run', 'revert'], default: 'list' }, videoId: { type: 'string' }, actionId: { type: 'integer' } } } },
+  { name: 'ctr_report', description: 'Impressions and impressions CTR per video and per day from the YouTube Reporting API (daily, ~2-day delay), the channel\'s usual first-days CTR, and high-impression videos with low CTR (packaging fix candidates). sync=true pulls new reports first.',
+    inputSchema: { type: 'object', properties: { channelId: { type: 'string' }, days: { type: 'integer', default: 28 }, sync: { type: 'boolean', default: false } } } },
   { name: 'tubedesk_api', description: 'Call any TubeDesk REST endpoint (GET /api/... or POST /api/... with a JSON body). See GET /api/agent for the route list.',
     inputSchema: { type: 'object', required: ['path'], properties: { method: { type: 'string', enum: ['GET', 'POST', 'PUT', 'DELETE'], default: 'GET' }, path: { type: 'string', description: 'e.g. /api/channels' }, body: { type: 'object' } } } },
 ];
@@ -85,6 +91,13 @@ async function runTool(name, a = {}) {
     case 'radar_score': return call('POST', '/api/radar/score', { ...a, channelId: a.channelId || await firstOwned() });
     case 'radar_watch': { const id = a.channelId || await firstOwned(); if (a.run) await call('POST', '/api/radar/watch/run'); return call('GET', `/api/radar/watch/${encodeURIComponent(id)}`); }
     case 'radar_calibrate': { const id = a.channelId || await firstOwned(); return call('POST', `/api/radar/calibrate/${encodeURIComponent(id)}?wait=1&timeout=3600`, { aiLimit: a.aiLimit, ai: a.ai }); }
+    case 'daily_ideas': { const id = a.channelId || await firstOwned(); if (a.run) return call('POST', `/api/ideas/${encodeURIComponent(id)}/run`, { count: a.count }); return call('GET', `/api/ideas/${encodeURIComponent(id)}`); }
+    case 'autopilot': {
+      if (a.action === 'run') { if (!a.videoId) throw new Error('videoId is required for action "run"'); return call('POST', `/api/autopilot/run/${encodeURIComponent(a.videoId)}`, {}); }
+      if (a.action === 'revert') { if (!a.actionId) throw new Error('actionId is required for action "revert"'); return call('POST', `/api/autopilot/actions/${a.actionId}/revert`, {}); }
+      return call('GET', `/api/autopilot/${encodeURIComponent(a.channelId || await firstOwned())}`);
+    }
+    case 'ctr_report': { const id = a.channelId || await firstOwned(); if (a.sync) await call('POST', `/api/reach/${encodeURIComponent(id)}/sync`, {}); return call('GET', `/api/reach/${encodeURIComponent(id)}?days=${a.days || 28}`); }
     case 'tubedesk_api': { const p = String(a.path || ''); if (!p.startsWith('/api/')) throw new Error('path must start with /api/'); return call(a.method || 'GET', p, a.body); }
     default: throw new Error(`unknown tool ${name}`);
   }
@@ -104,7 +117,7 @@ async function handle(line) {
   const reply = result => id !== undefined && out({ jsonrpc: '2.0', id, result });
   const fail = (code, message) => id !== undefined && out({ jsonrpc: '2.0', id, error: { code, message } });
   try {
-    if (method === 'initialize') return reply({ protocolVersion: params?.protocolVersion || '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'tubedesk', version: VERSION }, instructions: `TubeDesk at ${BASE}: render_video turns a JSON timeline into an MP4; publish_youtube / publish_instagram upload it. Before publishing, radar_score ranks title/thumbnail variants on the virality radar; after publishing, radar_watch shows whether the upload is beating its usual launch curve. All file arguments are absolute paths on this machine. Read GET /api/agent (tubedesk_api) for the full route list.` });
+    if (method === 'initialize') return reply({ protocolVersion: params?.protocolVersion || '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'tubedesk', version: VERSION }, instructions: `TubeDesk at ${BASE}: render_video turns a JSON timeline into an MP4; publish_youtube / publish_instagram upload it. Before publishing, radar_score ranks title/thumbnail variants on the virality radar; after publishing, radar_watch shows whether the upload is beating its usual launch curve, autopilot fixes lagging uploads, ctr_report gives real impressions/CTR, and daily_ideas is the morning idea list. All file arguments are absolute paths on this machine. Read GET /api/agent (tubedesk_api) for the full route list.` });
     if (method === 'notifications/initialized' || method === 'initialized') return;
     if (method === 'ping') return reply({});
     if (method === 'tools/list') return reply({ tools: TOOLS });

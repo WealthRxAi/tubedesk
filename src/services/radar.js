@@ -17,6 +17,8 @@ import { demandIndex } from './scores.js';
 import { addAlert } from './competitors.js';
 import { median, mean, clamp } from './stats.js';
 import * as ai from './ai.js';
+import * as reach from './reach.js';
+import { flushHeld } from './notify.js';
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS radar_features (
@@ -100,6 +102,10 @@ CREATE TABLE IF NOT EXISTS radar_ticks (
 );
 CREATE INDEX IF NOT EXISTS idx_radar_ticks_video ON radar_ticks(video_id, age_hours);
 `);
+
+for (const [col, type] of [['ctr', 'REAL'], ['ctr_vs_channel', 'REAL'], ['impressions', 'INTEGER'], ['autopilot_note', 'TEXT']]) {
+  if (!db.prepare('PRAGMA table_info(radar_watch)').all().some(c => c.name === col)) db.exec(`ALTER TABLE radar_watch ADD COLUMN ${col} ${type}`);
+}
 
 const FEATURE_VERSION = 'v1';
 const HOUR = 3600000, DAY = 86400000;
@@ -301,7 +307,7 @@ Return JSON: {"items":[{"key":"<key>","curiosity":0,"emotion":0,"thumbnail":null
   return res;
 }
 
-async function localImage({ thumbnailPath, thumbnailUrl }) {
+export async function localImage({ thumbnailPath, thumbnailUrl }) {
   if (thumbnailPath) return assertThumbPath(thumbnailPath);
   if (!thumbnailUrl) return null;
   // Images uploaded through TubeDesk are served at /data/thumbs/<name>; read them from disk instead of over HTTP.
@@ -519,65 +525,83 @@ function advice(axes, details, ai) {
 }
 
 /**
- * Score one to eight packages for the same video idea and rank them.
- * body: {channelId, variants:[{title, thumbnailUrl?, thumbnailPath?}] | title, thumbnailUrl, thumbnailPath, hook, keyword, format: long|short, ai: bool, save: bool}
+ * Score any set of packages against one channel. Shared by the Score tab, the daily idea list and the autopilot,
+ * so every surface ranks the same way. packages: [{key, title, keyword?, hook?, image? (local file), thumbnail? (display url)}]
+ * Returns {results: {key: result}, notes, aiUsed, model}. AI axes are rated in batches of up to 8 packages per call.
  */
-export async function scoreIdea(body = {}) {
-  const { channelId = null, hook = '', format = 'long', ai: useAI = true, save = true } = body;
-  const country = body.country || getSetting('default_country', 'US');
-  let variants = Array.isArray(body.variants) && body.variants.length ? body.variants : [{ title: body.title, thumbnailUrl: body.thumbnailUrl, thumbnailPath: body.thumbnailPath }];
-  variants = variants.map(v => typeof v === 'string' ? { title: v } : v).filter(v => String(v?.title || '').trim()).slice(0, 8)
-    .map((v, i) => ({ key: 'v' + (i + 1), title: String(v.title).trim().slice(0, 150), thumbnailUrl: v.thumbnailUrl || null, thumbnailPath: v.thumbnailPath || null }));
-  if (!variants.length) throw Object.assign(new Error('At least one title is required.'), { status: 400 });
+export async function scorePackages(channelId, packages, { useAI = true, format = 'long', country = getSetting('default_country', 'US'), corpus = null } = {}) {
   const isShort = format === 'short';
-  const corpus = channelId ? buildCorpus(channelId) : [];
+  corpus = corpus || (channelId ? buildCorpus(channelId) : []);
   const model = currentModel(channelId);
-  const keyword = String(body.keyword || '').trim() || titleSeed(variants[0].title) || [...tokens(variants[0].title)].slice(0, 3).join(' ');
   const notes = [];
-
-  let demand = null;
-  if (keyword) {
-    try { const d = await demandIndex(keyword, { country }); demand = { value: d.demandIndex, detail: { keyword, band: d.band, components: d.components, regionsPresent: d.regionsPresent } }; }
-    catch (e) { notes.push(`Demand index unavailable: ${e.message}`); }
+  const demandByKw = new Map();
+  for (const p of packages) {
+    const kw = (p.keyword || '').trim() || titleSeed(p.title) || [...tokens(p.title)].slice(0, 3).join(' ');
+    p._kw = kw;
+    if (!kw || demandByKw.has(kw.toLowerCase())) continue;
+    try { const d = await demandIndex(kw, { country }); demandByKw.set(kw.toLowerCase(), { value: d.demandIndex, detail: { keyword: kw, band: d.band, components: d.components, regionsPresent: d.regionsPresent } }); }
+    catch (e) { demandByKw.set(kw.toLowerCase(), null); notes.push(`Demand index unavailable for "${kw}": ${e.message}`); }
   }
-
   let aiRes = {}, aiUsed = false;
   if (useAI && aiAvailable()) {
+    const context = channelContextLine(channelId);
     try {
-      const items = [];
-      for (const v of variants) {
-        let image = null;
-        try { image = await localImage(v); } catch (e) { notes.push(`Thumbnail for "${v.title}" could not be loaded: ${e.message}`); }
-        items.push({ key: v.key, title: v.title, image, hook: hook || null });
+      for (let i = 0; i < packages.length; i += 8) {
+        const batch = packages.slice(i, i + 8).map(p => ({ key: p.key, title: p.title, image: p.image || null, hook: p.hook || null }));
+        Object.assign(aiRes, await aiAxes(batch, { context }));
       }
-      aiRes = await aiAxes(items, { context: channelContextLine(channelId) });
       aiUsed = true;
     } catch (e) { notes.push(`AI axes skipped: ${e.message}`); }
   } else notes.push(useAI ? 'AI is off in Settings, so curiosity, emotion, thumbnail and hook are not scored; the composite uses the other axes.' : 'AI axes skipped for this run.');
   if (!channelId) notes.push('No channel selected: proven-pattern fit and freshness need a channel library.');
-  if (!model.calibrated) notes.push('Uncalibrated: weights are the default priors. Run Calibration so the radar learns what moves views on this channel.');
-  else if (model.map.beta === 0 || model.metrics?.holdout?.verdict === 'not predictive yet') notes.push('On this channel\'s history the radar score has not yet predicted views (calibration verdict: not predictive yet), so every package gets your usual-views baseline as its prediction. The ranking still compares the packages axis by axis; treat it as a packaging checklist, and recalibrate as more uploads mature.');
-
-  const batchId = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-  const results = variants.map(v => {
-    const tok = tokens(v.title);
-    const pf = channelId ? patternFitAxis(tok, formatLabel(v.title), corpus, { isShort }) : null;
+  const results = {};
+  for (const p of packages) {
+    const tok = tokens(p.title);
+    const demand = demandByKw.get((p._kw || '').toLowerCase()) || null;
+    const pf = channelId ? patternFitAxis(tok, formatLabel(p.title), corpus, { isShort }) : null;
     const fr = channelId ? freshnessAxis(tok, corpus, { selfChannelId: channelId }) : null;
-    const ta = analyzeTitle(v.title, { keyword: body.keyword || '' });
-    const a = aiRes[v.key] || {};
+    const ta = analyzeTitle(p.title, { keyword: p.keyword || '' });
+    const a = aiRes[p.key] || {};
     const axes = {
       demand: demand?.value ?? null, patternFit: pf?.value ?? null, freshness: fr?.value ?? null, titleCraft: ta.score,
       curiosity: a.curiosity ?? null, emotion: a.emotion ?? null, thumbnail: a.thumbnail ?? null, hook: a.hook ?? null,
     };
     const details = { demand: demand?.detail || null, patternFit: pf?.detail || null, freshness: fr?.detail || null, titleCraft: { failed: ta.checks.filter(c => !c.pass).map(c => c.name) } };
     const comp = composite(axes, model.weights);
-    const pred = predict(comp.score, model.map);
-    return { key: v.key, title: v.title, thumbnail: v.thumbnailUrl || (v.thumbnailPath ? '/data/thumbs/' + String(v.thumbnailPath).split('/').pop() : null), axes, details,
-      score: comp.score === null ? null : Math.round(comp.score), coverage: round(comp.coverage, 2), prediction: pred,
-      ai: aiRes[v.key] ? { why: a.why, fix: a.fix } : null, advice: advice(axes, details, aiRes[v.key]) };
-  }).sort((x, y) => (y.score ?? -1) - (x.score ?? -1));
+    results[p.key] = { key: p.key, title: p.title, keyword: p._kw, thumbnail: p.thumbnail || null, axes, details,
+      score: comp.score === null ? null : Math.round(comp.score), coverage: round(comp.coverage, 2), prediction: predict(comp.score, model.map),
+      ai: aiRes[p.key] ? { why: a.why, fix: a.fix } : null, advice: advice(axes, details, aiRes[p.key]) };
+  }
+  return { results, notes, aiUsed, model };
+}
+
+/**
+ * Score one to eight packages for the same video idea and rank them.
+ * body: {channelId, variants:[{title, thumbnailUrl?, thumbnailPath?}] | title, thumbnailUrl, thumbnailPath, hook, keyword, format: long|short, ai: bool, save: bool}
+ */
+export async function scoreIdea(body = {}) {
+  const { channelId = null, hook = '', format = 'long', ai: useAI = true, save = true } = body;
+  let variants = Array.isArray(body.variants) && body.variants.length ? body.variants : [{ title: body.title, thumbnailUrl: body.thumbnailUrl, thumbnailPath: body.thumbnailPath }];
+  variants = variants.map(v => typeof v === 'string' ? { title: v } : v).filter(v => String(v?.title || '').trim()).slice(0, 8)
+    .map((v, i) => ({ key: 'v' + (i + 1), title: String(v.title).trim().slice(0, 150), thumbnailUrl: v.thumbnailUrl || null, thumbnailPath: v.thumbnailPath || null }));
+  if (!variants.length) throw Object.assign(new Error('At least one title is required.'), { status: 400 });
+  const isShort = format === 'short';
+  const keyword = String(body.keyword || '').trim() || titleSeed(variants[0].title) || [...tokens(variants[0].title)].slice(0, 3).join(' ');
+  const pre = [];
+  const packages = [];
+  for (const v of variants) {
+    let image = null;
+    if (useAI && aiAvailable()) { try { image = await localImage(v); } catch (e) { pre.push(`Thumbnail for "${v.title}" could not be loaded: ${e.message}`); } }
+    packages.push({ key: v.key, title: v.title, keyword, hook: hook || null, image, thumbnail: v.thumbnailUrl || (v.thumbnailPath ? '/data/thumbs/' + path.basename(String(v.thumbnailPath)) : null) });
+  }
+  const { results: byKey, notes: scoreNotes, aiUsed, model } = await scorePackages(channelId, packages, { useAI, format, country: body.country || getSetting('default_country', 'US') });
+  const notes = [...pre, ...scoreNotes];
+  if (!model.calibrated) notes.push('Uncalibrated: weights are the default priors. Run Calibration so the radar learns what moves views on this channel.');
+  else if (model.map.beta === 0 || model.metrics?.holdout?.verdict === 'not predictive yet') notes.push('On this channel\'s history the radar score has not yet predicted views (calibration verdict: not predictive yet), so every package gets your usual-views baseline as its prediction. The ranking still compares the packages axis by axis; treat it as a packaging checklist, and recalibrate as more uploads mature.');
+  const results = variants.map(v => byKey[v.key]).sort((x, y) => (y.score ?? -1) - (x.score ?? -1));
   results.forEach((r, i) => { r.rank = i + 1; });
 
+  const batchId = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
   if (save) {
     const ins = db.prepare(`INSERT INTO radar_scores (batch_id, channel_id, title, thumbnail, hook, keyword, format, axes_json, composite, coverage, predicted_x, p_breakout, band, model_id, rank)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
@@ -718,6 +742,7 @@ async function watchTickInner({ log = () => {} } = {}) {
   }
   const summary = { channels: 0, watched: 0, ticks: 0, alerts: [], errors: [], at: new Date().toISOString() };
   const want = new Map();
+  const autopilotQueue = [];
   for (const t of targets) {
     if (!t.ch.uploads_playlist) continue;
     try {
@@ -777,14 +802,42 @@ async function watchTickInner({ log = () => {} } = {}) {
       db.prepare('UPDATE radar_watch SET alerted_lagging = 1 WHERE video_id = ?').run(v.id);
     }
     if (t.kind === 'owned' && !existing) linkScores(v.channel_id, v);
+    if (t.kind === 'owned') {
+      // Real CTR/impressions from the Reporting API (arrives ~2 days after each day), vs the channel's usual first days.
+      const lc = reach.launchComparison(v.id, v.channel_id, { isShort: !!v.is_short });
+      const r = lc?.video || reach.videoReach(v.id);
+      if (r) db.prepare('UPDATE radar_watch SET ctr = ?, impressions = ?, ctr_vs_channel = ? WHERE video_id = ?').run(r.ctr, r.impressions, lc?.baseline && r.ctr !== null ? r.ctr / lc.baseline.ctr : null, v.id);
+      autopilotQueue.push({ video: v, status, ageHours: ageH, confidence: base.confidence, paceIndex: index });
+    }
   }
   // Videos past their window stop ticking but keep their final reading (and their launch curve for future baselines).
   for (const w of db.prepare('SELECT video_id, published_at, kind FROM radar_watch WHERE active = 1').all()) {
     const days = w.kind === 'owned' ? ownDays : compDays;
     if (now - Date.parse(w.published_at) > days * DAY) db.prepare('UPDATE radar_watch SET active = 0 WHERE video_id = ?').run(w.video_id);
   }
+  // Autopilot: act on lagging owned uploads, then grade earlier changes on real CTR.
+  summary.autopilot = [];
+  if (autopilotQueue.length || db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'autopilot_actions'").get()) {
+    try {
+      const ap = await import('./autopilot.js');
+      for (const q of autopilotQueue) {
+        try {
+          const dbVideo = db.prepare('SELECT * FROM videos WHERE id = ?').get(q.video.id) || { ...q.video, is_short: q.video.is_short ? 1 : 0 };
+          const d = ap.shouldRun(dbVideo, q);
+          db.prepare('UPDATE radar_watch SET autopilot_note = ? WHERE video_id = ?').run(d.run ? 'running' : d.why + (d.diagnosis?.kind && d.diagnosis.kind !== 'unknown' ? ` · ${d.diagnosis.kind}` : ''), q.video.id);
+          if (!d.run) continue;
+          const a = await ap.runForVideo(q.video.id, { trigger: d.trigger, paceIndex: q.paceIndex, diagnosis: d.diagnosis });
+          db.prepare('UPDATE radar_watch SET autopilot_note = ? WHERE video_id = ?').run(`${a.status}: ${a.message}`.slice(0, 300), q.video.id);
+          summary.autopilot.push({ videoId: q.video.id, status: a.status });
+        } catch (e) { summary.errors.push(`autopilot ${q.video.id}: ${e.message}`); }
+      }
+      const graded = await ap.evaluatePending();
+      if (graded.length) summary.autopilotGraded = graded.length;
+    } catch (e) { summary.errors.push('autopilot: ' + e.message); }
+  }
+  try { await flushHeld(); } catch { /* phone delivery is best-effort */ }
   db.prepare("INSERT INTO settings(key, value) VALUES ('radar_last_watch', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify({ ...summary, alerts: summary.alerts.length }));
-  log('[radar] watch', { watched: summary.watched, alerts: summary.alerts.length, errors: summary.errors.length });
+  log('[radar] watch', { watched: summary.watched, alerts: summary.alerts.length, autopilot: summary.autopilot.length, errors: summary.errors.length });
   return summary;
 }
 
