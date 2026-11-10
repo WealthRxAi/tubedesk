@@ -8,7 +8,7 @@ process.env.TUBEDESK_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'td-unit-'
 
 const { parseDuration, isShort } = await import('../src/youtube/client.js');
 const { analyzeTitle, analyzeDescription, validateChapters } = await import('../src/services/packaging.js');
-const { median, pct } = await import('../src/services/stats.js');
+const { median, pct, fmtNum } = await import('../src/services/stats.js');
 const { parseCsv, importStudioCsv, earningsScenario, toCsv } = await import('../src/services/misc.js');
 const { titlePatterns, formatLabel, scoreOutliers } = await import('../src/services/discovery.js');
 const { parseSrt } = await import('../src/services/coach.js');
@@ -28,6 +28,22 @@ test('shorts detection', () => {
   assert.equal(isShort(181), false);
   assert.equal(isShort(600, 'Title #shorts'), true);
   assert.equal(isShort(0), false);
+});
+test('fmtNum rolls up to the next unit at rounding boundaries', () => {
+  assert.equal(fmtNum(999950), '1.0M');
+  assert.equal(fmtNum(999999999), '1.0B');
+  assert.equal(fmtNum(999.6), '1.0K');
+  assert.equal(fmtNum(999949), '999.9K');
+  assert.equal(fmtNum(1234), '1.2K');
+  assert.equal(fmtNum(12), '12');
+  assert.equal(fmtNum(2500000), '2.5M');
+  assert.equal(fmtNum(null), '—');
+  // client-side fmt in public/js/core.js must agree with fmtNum
+  const src = fs.readFileSync(new URL('../public/js/core.js', import.meta.url), 'utf8');
+  const fmt = new Function(`${src.match(/const fmt = n => \{.*\};/)[0]} return fmt;`)();
+  for (const n of [999950, 999999999, 999.6, 999949, 1234, 12, 2500000, 0, -1234567]) {
+    assert.equal(fmt(n), fmtNum(n), `fmt(${n}) !== fmtNum(${n})`);
+  }
 });
 test('stats', () => {
   assert.equal(median([1, 2, 3, 4]), 2.5);

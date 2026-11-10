@@ -21,9 +21,11 @@ export function stddev(arr) {
 export function clamp(x, lo, hi) { return Math.max(lo, Math.min(hi, x)); }
 export function fmtNum(n) {
   if (n === null || n === undefined) return '—';
-  if (Math.abs(n) >= 1e9) return (n / 1e9).toFixed(1) + 'B';
-  if (Math.abs(n) >= 1e6) return (n / 1e6).toFixed(1) + 'M';
-  if (Math.abs(n) >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+  // Thresholds sit at the rounding boundary (999.95 of the lower unit), so
+  // values that toFixed(1) would show as "1000.0K" roll up to "1.0M" instead.
+  if (Math.abs(n) >= 999.95e6) return (n / 1e9).toFixed(1) + 'B';
+  if (Math.abs(n) >= 999.95e3) return (n / 1e6).toFixed(1) + 'M';
+  if (Math.abs(n) >= 999.5) return (n / 1e3).toFixed(1) + 'K';
   return String(Math.round(n));
 }
 export function daysSince(iso) {
