@@ -1,0 +1,66 @@
+{
+  "permissions": {
+    "allow": [
+      "Read",
+      "Edit",
+      "Write",
+      "Glob",
+      "Grep",
+      "Bash(npm test:*)",
+      "Bash(npm run test:*)",
+      "Bash(npm run lint:*)",
+      "Bash(npm run build:*)",
+      "Bash(npm run typecheck:*)",
+      "Bash(npx vitest:*)",
+      "Bash(npx tsc:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(ls:*)",
+      "Bash(node --test:*)",
+      "Bash(node -e:*)"
+    ],
+    "deny": [
+      "Read(**/.env*)",
+      "Edit(**/.env*)",
+      "WebFetch",
+      "WebSearch",
+      "Bash(git push:*)",
+      "Bash(git merge:*)",
+      "Bash(git rebase:*)",
+      "Bash(git reset:*)",
+      "Bash(git checkout:*)",
+      "Bash(git switch:*)",
+      "Bash(gh:*)",
+      "Bash(vercel:*)",
+      "Bash(supabase:*)",
+      "Bash(stripe:*)",
+      "Bash(npm install:*)",
+      "Bash(npm publish:*)",
+      "Bash(rm -rf:*)",
+      "Bash(curl:*)",
+      "Bash(wget:*)"
+    ]
+  },
+  "sandbox": {
+    "enabled": true,
+    "allowUnsandboxedCommands": false,
+    "failIfUnavailable": true,
+    "network": {
+      "allowedDomains": []
+    },
+    "filesystem": {
+      "denyRead": [
+        "./.env",
+        "./.env.local",
+        "./.env.production",
+        "~/.ssh",
+        "~/.aws",
+        "~/.config/gh"
+      ]
+    }
+  }
+}
