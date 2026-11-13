@@ -11,11 +11,11 @@
     const body = main.querySelector('#body');
 
     if (tab === 'voice') {
-      body.innerHTML = h`${vs.configured ? '' : h`<div class="note bad" style="margin-bottom:12px">ElevenLabs is not configured — paste your API key in Settings → Voiceover.</div>`}
+      body.innerHTML = h`${vs.configured ? h`<div class="mini" style="margin-bottom:12px">Provider: <b>${vs.provider}</b>${vs.provider === 'heygen' ? ' (your cloned voice' + (vs.heygen.voice_id ? '' : ' — no voice ID set yet, see Settings') + ')' : ''} · model ${vs.model}</div>` : h`<div class="note bad" style="margin-bottom:12px">No voice provider configured — paste your HeyGen API key (your cloned voice) or an ElevenLabs key in Settings → Voiceover.</div>`}
         <div class="grid g2"><div class="card"><h2>Script → voiceover</h2>
           <textarea id="text" style="min-height:160px" placeholder="One scene per request (≤ 5,000 characters). Punctuation drives the pacing."></textarea>
-          <div class="row" style="margin-top:8px"><input id="voice" placeholder="voice ID (blank = ${vs.voice_id})" style="flex:1"><input id="speed" type="number" step="0.05" min="0.7" max="1.2" value="1" style="width:80px" title="speed"><button id="go" class="primary">Generate</button></div>
-          <div class="mini" style="margin-top:6px">Returns an MP3 plus every word's start/end from ElevenLabs' alignment — captions in the renderer line up with the voice without pause detection.</div></div>
+          <div class="row" style="margin-top:8px"><select id="prov" title="provider"><option value="">${vs.provider}</option><option value="heygen">heygen</option><option value="elevenlabs">elevenlabs</option></select><input id="voice" placeholder="voice ID (blank = ${vs.voice_id || 'default'})" style="flex:1"><input id="speed" type="number" step="0.05" min="0.7" max="1.2" value="1" style="width:80px" title="speed"><button id="go" class="primary">Generate</button></div>
+          <div class="mini" style="margin-top:6px">Returns an MP3 plus every word's start/end from the provider's timestamps — captions in the renderer line up with the voice without pause detection.</div></div>
         <div class="card"><h2>Script → ready Short</h2>
           <textarea id="text2" style="min-height:90px" placeholder="Script"></textarea>
           <label class="f">Background video or image (absolute path on this Mac)<input id="bg" placeholder="/Users/you/Movies/screen-recording.mp4"></label>
@@ -29,8 +29,8 @@
         const text = body.querySelector('#text').value.trim(); if (!text) return;
         busy(e.target, true); const out = body.querySelector('#out');
         try {
-          const v = await api('/media/voiceover', { method: 'POST', body: { text, voiceId: body.querySelector('#voice').value.trim() || undefined, speed: Number(body.querySelector('#speed').value) || 1 } });
-          out.innerHTML = h`<div class="card"><div class="grid g4">${raw(stat('Duration', v.duration.toFixed(1) + 's'))}${raw(stat('Words', v.words.length))}${raw(stat('Caption groups', v.groups.length))}${raw(stat('Characters', fmtFull(v.chars)))}</div>
+          const v = await api('/media/voiceover', { method: 'POST', body: { text, provider: body.querySelector('#prov').value || undefined, voiceId: body.querySelector('#voice').value.trim() || undefined, speed: Number(body.querySelector('#speed').value) || 1 } });
+          out.innerHTML = h`<div class="card"><div class="grid g4">${raw(stat('Duration', v.duration.toFixed(1) + 's'))}${raw(stat('Words', v.words.length))}${raw(stat('Caption groups', v.groups.length))}${raw(stat('Characters', fmtFull(v.chars)))}</div><div class="mini" style="margin-top:6px">${v.provider} · voice ${v.voice_id} · ${v.model}</div>
             <div class="mini" style="margin-top:8px">File: <code>${v.file}</code></div><audio controls src="/data/voiceovers/${v.file.split('/').pop()}" style="width:100%;margin-top:8px"></audio>
             <details style="margin-top:8px"><summary class="mini">Captions track (paste into a timeline)</summary><pre class="mini" style="white-space:pre-wrap">${JSON.stringify({ type: 'captions', groups: v.groups, y: 1180, size: 58, font: 'bold' })}</pre></details></div>`;
           list();

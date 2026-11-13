@@ -37,7 +37,7 @@ import { runDailySnapshot } from '../jobs/scheduler.js';
 
 export const api = Router();
 const w = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
-const SECRET_KEYS = ['yt_api_key', 'google_client_secret', 'anthropic_api_key', 'ig_access_token', 'notify_webhook_url', 'notify_ntfy_topic', 'tt_client_secret', 'tt_access_token', 'tt_refresh_token', 'elevenlabs_api_key', 'higgsfield_api_key', 'higgsfield_api_secret'];
+const SECRET_KEYS = ['yt_api_key', 'google_client_secret', 'anthropic_api_key', 'ig_access_token', 'notify_webhook_url', 'notify_ntfy_topic', 'tt_client_secret', 'tt_access_token', 'tt_refresh_token', 'elevenlabs_api_key', 'heygen_api_key', 'higgsfield_api_key', 'higgsfield_api_secret'];
 
 // ---------- status & settings ----------
 api.get('/status', w(async (req, res) => {
@@ -167,8 +167,8 @@ api.post('/media/segments', w(async (req, res) => res.json(await ren.speechSegme
 
 // ---- Voiceover (ElevenLabs) ----
 api.get('/media/voiceover/status', w(async (req, res) => res.json(voice.status())));
-api.get('/media/voiceover/voices', w(async (req, res) => res.json(await voice.listVoices())));
-api.get('/media/voiceover/quota', w(async (req, res) => res.json(await voice.subscription())));
+api.get('/media/voiceover/voices', w(async (req, res) => res.json(voice.provider(req.query.provider) === 'heygen' ? await voice.heygenVoices() : await voice.listVoices())));
+api.get('/media/voiceover/quota', w(async (req, res) => res.json(voice.provider(req.query.provider) === 'heygen' ? await voice.heygenQuota() : await voice.subscription())));
 api.get('/media/voiceover', w(async (req, res) => res.json(voice.listVoiceovers(Number(req.query.limit || 50)))));
 api.get('/media/voiceover/:id', w(async (req, res) => { const v = voice.getVoiceover(req.params.id); if (!v) return res.status(404).json({ error: 'not found' }); res.json(v); }));
 api.post('/media/voiceover', w(async (req, res) => res.json(await voice.speak(req.body || {}))));
@@ -719,8 +719,8 @@ AUTOPILOT, IDEAS, CTR, PHONE
   GET  /api/reach/:channelId                    impressions + CTR from the Reporting API (daily, ~2-day delay)
   POST /api/notify/test                         send a test alert to the configured phone channels
 
-VOICEOVER (ElevenLabs — your key in Settings → Voiceover) AND THUMBNAILS
-  POST /api/media/voiceover {"text":"script…","voiceId":"optional"}       → {"file":"/abs/vo.mp3","duration":12.4,"words":[{word,start,end}],"groups":[{text,start,end}]}
+VOICEOVER (your HeyGen cloned voice, or ElevenLabs — keys in Settings → Voiceover) AND THUMBNAILS
+  POST /api/media/voiceover {"text":"script…","provider":"heygen|elevenlabs (optional)","voiceId":"optional"}       → {"file":"/abs/vo.mp3","duration":12.4,"words":[{word,start,end}],"groups":[{text,start,end}]}
        drop "groups" into a captions track and "file" into an audio track — word-accurate captions, no pause detection needed.
   POST /api/media/voiceover/short?wait=1 {"text":"…","background":"/abs/clip.mp4","headline":"HOOK","render":true}
        → voiceover + a ready 9:16 timeline (+ the rendered MP4 when render:true)

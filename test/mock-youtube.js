@@ -61,6 +61,24 @@ export function startMock(port = 0) {
       }
       return json({ detail: 'unknown ' + p }, 404);
     }
+    // --- HeyGen (voiceover with the user's cloned voice) ---
+    if (u.pathname.startsWith('/hg/')) {
+      const p = u.pathname.slice(4);
+      if (req.headers['x-api-key'] !== 'HGKEY') return json({ error: { message: 'Unauthorized' } }, 401);
+      if (p === 'v2/voices') return json({ data: { voices: [{ voice_id: 'stock1', name: 'Abigail', language: 'English', gender: 'female' }, { voice_id: 'clone9', name: 'Salman clone', language: 'English', gender: 'male', is_clone: true, preview_audio: 'https://x/c.mp3' }] } });
+      if (p === 'v2/user/remaining_quota') return json({ data: { remaining_quota: 5400, details: { api: 5400 } } });
+      if (p === 'v3/models/audio/tts') {
+        let b = ''; req.on('data', d => b += d);
+        return req.on('end', () => {
+          const body = JSON.parse(b); calls.at(-1).hgBody = body;
+          if (body.voice_id !== 'clone9') return json({ error: { message: 'voice not found' } }, 400);
+          const words = body.text.split(/\s+/).filter(Boolean).map((w, i) => ({ text: w, start_time: i * 0.4, end_time: i * 0.4 + 0.35 }));
+          return json({ data: { audio_url: `${THUMB_BASE}/hg-audio.mp3`, duration: words.length * 0.4, original_words: body.with_timestamps ? words : undefined } });
+        });
+      }
+      return json({ error: { message: 'unknown ' + p } }, 404);
+    }
+    if (u.pathname === '/hg-audio.mp3') { res.writeHead(200, { 'content-type': 'audio/mpeg' }); return res.end(EL.mp3); }
     // --- Higgsfield (thumbnail backgrounds) ---
     if (u.pathname.startsWith('/hf/')) {
       const p = u.pathname.slice(4);

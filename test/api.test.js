@@ -23,7 +23,7 @@ before(async () => {
   mock = await startMock(0);
   const port = 4900 + Math.floor(Math.random() * 90);
   base = `http://127.0.0.1:${port}`;
-  child = spawn(process.execPath, ['src/server.js'], { cwd: path.join(path.dirname(new URL(import.meta.url).pathname), '..'), env: { ...process.env, PORT: String(port), TUBEDESK_DATA_DIR: dataDir, TUBEDESK_NO_SCHEDULER: '1', YT_API_BASE: `http://127.0.0.1:${mock.port}/youtube/v3`, YT_ANALYTICS_BASE: `http://127.0.0.1:${mock.port}/v2/reports`, YT_SUGGEST_URL: `http://127.0.0.1:${mock.port}/complete/search`, YT_UPLOAD_BASE: `http://127.0.0.1:${mock.port}/upload`, IG_GRAPH_BASE: `http://127.0.0.1:${mock.port}/ig`, TT_API_BASE: `http://127.0.0.1:${mock.port}/tt`, TT_AUTH_BASE: `http://127.0.0.1:${mock.port}/tt-auth`, EL_API_BASE: `http://127.0.0.1:${mock.port}/el`, HF_API_BASE: `http://127.0.0.1:${mock.port}/hf` }, stdio: ['ignore', 'pipe', 'pipe'] });
+  child = spawn(process.execPath, ['src/server.js'], { cwd: path.join(path.dirname(new URL(import.meta.url).pathname), '..'), env: { ...process.env, PORT: String(port), TUBEDESK_DATA_DIR: dataDir, TUBEDESK_NO_SCHEDULER: '1', YT_API_BASE: `http://127.0.0.1:${mock.port}/youtube/v3`, YT_ANALYTICS_BASE: `http://127.0.0.1:${mock.port}/v2/reports`, YT_SUGGEST_URL: `http://127.0.0.1:${mock.port}/complete/search`, YT_UPLOAD_BASE: `http://127.0.0.1:${mock.port}/upload`, IG_GRAPH_BASE: `http://127.0.0.1:${mock.port}/ig`, TT_API_BASE: `http://127.0.0.1:${mock.port}/tt`, TT_AUTH_BASE: `http://127.0.0.1:${mock.port}/tt-auth`, EL_API_BASE: `http://127.0.0.1:${mock.port}/el`, HF_API_BASE: `http://127.0.0.1:${mock.port}/hf`, HEYGEN_API_BASE: `http://127.0.0.1:${mock.port}/hg` }, stdio: ['ignore', 'pipe', 'pipe'] });
   child.stderr.on('data', d => process.stderr.write('[server] ' + d));
   for (let i = 0; i < 50; i++) { try { await fetch(base + '/api/status'); break; } catch { await new Promise(r => setTimeout(r, 100)); } }
 });
@@ -431,19 +431,35 @@ test('social: Instagram account research (business discovery), outliers, hashtag
 
 const FFMPEG = ['/usr/local/bin/ffmpeg', '/usr/bin/ffmpeg', '/opt/homebrew/bin/ffmpeg'].find(p => fs.existsSync(p));
 test('voiceover: ElevenLabs words → caption groups; status, voices, quota; short timeline', async () => {
-  let r = await api('/media/voiceover', { method: 'POST', body: { text: 'hello' } }); assert.equal(r.status, 500); assert.ok(/not configured/.test(r.json.error));
+  let r = await api('/media/voiceover', { method: 'POST', body: { text: 'hello' } }); assert.equal(r.status, 500); assert.ok(/No voice provider/.test(r.json.error));
+  assert.equal((await ok('/media/voiceover/status')).provider, 'none');
   await ok('/settings', { method: 'PUT', body: { elevenlabs_api_key: 'ELKEY', elevenlabs_voice_id: 'V2' } });
   assert.equal((await ok('/settings')).elevenlabs_api_key, '••••LKEY');
-  const st = await ok('/media/voiceover/status'); assert.equal(st.configured, true); assert.equal(st.voice_id, 'V2');
+  const st = await ok('/media/voiceover/status'); assert.equal(st.configured, true); assert.equal(st.provider, 'elevenlabs'); assert.equal(st.voice_id, 'V2');
   const voices = await ok('/media/voiceover/voices'); assert.equal(voices.length, 2); assert.equal(voices[1].name, 'Sal');
   const q = await ok('/media/voiceover/quota'); assert.equal(q.left, 28800);
   if (FFMPEG) { const { execFileSync } = await import('node:child_process'); const mp3 = path.join(dataDir, 'fx.mp3'); execFileSync(FFMPEG, ['-y', '-loglevel', 'error', '-f', 'lavfi', '-i', "aevalsrc='0.3*sin(2*PI*220*t)':s=44100:d=3", '-c:a', 'libmp3lame', '-b:a', '64k', mp3]); EL.mp3 = fs.readFileSync(mp3); }
   const v = await ok('/media/voiceover', { method: 'POST', body: { text: 'TubeDesk is free. It runs on your Mac.', speed: 1.05 } });
-  assert.equal(v.voice_id, 'V2'); assert.ok(fs.existsSync(v.file)); assert.equal(v.words.length, 8); assert.equal(v.words[0].word, 'TubeDesk'); assert.equal(v.words[0].start, 0); assert.ok(v.words[7].end > 2);
+  assert.equal(v.provider, 'elevenlabs'); assert.equal(v.voice_id, 'V2'); assert.ok(fs.existsSync(v.file)); assert.equal(v.words.length, 8); assert.equal(v.words[0].word, 'TubeDesk'); assert.equal(v.words[0].start, 0); assert.ok(v.words[7].end > 2);
   assert.ok(v.groups.length >= 2 && v.groups.every(g => g.text && g.end > g.start)); assert.deepEqual(v.lines, ['TubeDesk is free.', 'It runs on your Mac.']);
   const el = calls.find(c => c.elBody); assert.equal(el.voice, 'V2'); assert.equal(el.elBody.voice_settings.speed, 1.05); assert.equal(el.elBody.model_id, 'eleven_multilingual_v2');
   assert.equal((await ok('/media/voiceover')).length, 1); assert.equal((await ok('/media/voiceover/' + v.id)).words.length, 8);
   r = await api('/media/voiceover', { method: 'POST', body: { text: 'x'.repeat(5001) } }); assert.equal(r.status, 500); assert.ok(/5,000/.test(r.json.error));
+  // HeyGen: becomes the default once its key is set; cloned voices listed first; words from original_words; provider override still works
+  await ok('/settings', { method: 'PUT', body: { heygen_api_key: 'HGKEY' } });
+  const st2 = await ok('/media/voiceover/status'); assert.equal(st2.provider, 'heygen'); assert.equal(st2.heygen.configured, true); assert.equal(st2.heygen.voice_id, '');
+  const hv = await ok('/media/voiceover/voices'); assert.equal(hv[0].name, 'Salman clone'); assert.equal(hv[0].cloned, true); assert.equal(hv.length, 2);
+  assert.equal((await ok('/media/voiceover/quota')).credits, 90);
+  assert.equal((await ok('/media/voiceover/voices?provider=elevenlabs')).length, 2);
+  r = await api('/media/voiceover', { method: 'POST', body: { text: 'No voice yet.' } }); assert.equal(r.status, 500); assert.ok(/voice ID/.test(r.json.error));
+  await ok('/settings', { method: 'PUT', body: { heygen_voice_id: 'clone9', heygen_model: 'heygen-voice-1-turbo-free' } });
+  const hvo = await ok('/media/voiceover', { method: 'POST', body: { text: 'Built with my own voice. Free.', speed: 1.1 } });
+  assert.equal(hvo.provider, 'heygen'); assert.equal(hvo.voice_id, 'clone9'); assert.equal(hvo.model, 'heygen-voice-1-turbo-free'); assert.equal(hvo.words.length, 6); assert.equal(hvo.words[1].word, 'with'); assert.equal(hvo.words[1].start, 0.4);
+  assert.equal(hvo.duration, 2.4); assert.ok(fs.existsSync(hvo.file) && fs.statSync(hvo.file).size === EL.mp3.length); assert.ok(hvo.groups.length >= 2);
+  const hgc = calls.find(c => c.hgBody); assert.equal(hgc.hgBody.with_timestamps, true); assert.equal(hgc.hgBody.output_format.encoding, 'mp3'); assert.equal(hgc.hgBody.speed, 1.1);
+  assert.equal((await ok('/media/voiceover', { method: 'POST', body: { text: 'Back to eleven.', provider: 'elevenlabs' } })).provider, 'elevenlabs');
+  await ok('/settings', { method: 'PUT', body: { voice_provider: 'elevenlabs' } }); assert.equal((await ok('/media/voiceover/status')).provider, 'elevenlabs');
+  await ok('/settings', { method: 'PUT', body: { voice_provider: 'auto' } });
   // timeline builder (no render)
   r = await api('/media/voiceover/short', { method: 'POST', body: { text: 'Hi there.' } }); assert.equal(r.status, 500); assert.ok(/background/.test(r.json.error));
   const still = path.join(dataDir, 'bg.png'); fs.writeFileSync(still, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64'));
