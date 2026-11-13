@@ -12,7 +12,7 @@ window.TD = (() => {
   const safe = s => SENT + String(s ?? '').split(SENT).join('');
   const h = (strings, ...vals) => SENT + strings.reduce((acc, s, i) => acc + s + (i < vals.length ? (Array.isArray(vals[i]) ? vals[i].map(one).join('') : one(vals[i])) : ''), '').split(SENT).join('');
   const raw = s => ({ __raw: String(s ?? '') });
-  const fmt = n => { if (n === null || n === undefined || Number.isNaN(n)) return '—'; n = Number(n); const a = Math.abs(n); if (a >= 1e9) return (n / 1e9).toFixed(1) + 'B'; if (a >= 1e6) return (n / 1e6).toFixed(1) + 'M'; if (a >= 1e3) return (n / 1e3).toFixed(1) + 'K'; return String(Math.round(n)); };
+  const fmt = n => { if (n === null || n === undefined || Number.isNaN(n)) return '—'; n = Number(n); const a = Math.abs(n); if (a >= 999.95e6) return (n / 1e9).toFixed(1) + 'B'; if (a >= 999.95e3) return (n / 1e6).toFixed(1) + 'M'; if (a >= 999.5) return (n / 1e3).toFixed(1) + 'K'; return String(Math.round(n)); };
   const fmtFull = n => n === null || n === undefined ? '—' : Number(n).toLocaleString();
   const pct = (x, d = 1) => x === null || x === undefined || Number.isNaN(x) ? '—' : (x * 100).toFixed(d) + '%';
   const toDate = iso => new Date(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$/.test(iso) ? iso.replace(' ', 'T') + 'Z' : iso); // SQLite datetime('now') is UTC
