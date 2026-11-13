@@ -18,6 +18,8 @@ import * as scores from '../services/scores.js';
 import * as stats from '../services/stats.js';
 import * as estimate from '../services/estimate.js';
 import * as exp from '../services/export.js';
+import * as voice from '../services/voice.js';
+import * as thumbs from '../services/thumbs.js';
 import * as pub from '../services/publish.js';
 import * as social from '../services/social.js';
 import * as ren from '../services/render.js';
@@ -35,7 +37,7 @@ import { runDailySnapshot } from '../jobs/scheduler.js';
 
 export const api = Router();
 const w = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
-const SECRET_KEYS = ['yt_api_key', 'google_client_secret', 'anthropic_api_key', 'ig_access_token', 'notify_webhook_url', 'notify_ntfy_topic', 'tt_client_secret', 'tt_access_token', 'tt_refresh_token'];
+const SECRET_KEYS = ['yt_api_key', 'google_client_secret', 'anthropic_api_key', 'ig_access_token', 'notify_webhook_url', 'notify_ntfy_topic', 'tt_client_secret', 'tt_access_token', 'tt_refresh_token', 'elevenlabs_api_key', 'higgsfield_api_key', 'higgsfield_api_secret'];
 
 // ---------- status & settings ----------
 api.get('/status', w(async (req, res) => {
@@ -43,7 +45,7 @@ api.get('/status', w(async (req, res) => {
   res.json({
     configured: { apiKey: !!s.yt_api_key, oauth: !!(s.google_client_id && s.google_client_secret) },
     ai: await ai.status(), quota: quotaToday(), channels: ch.listChannels().length,
-    lastSnapshot: s.last_snapshot ? JSON.parse(s.last_snapshot) : null, version: '1.6.0', dataDir: DATA_DIR,
+    lastSnapshot: s.last_snapshot ? JSON.parse(s.last_snapshot) : null, version: '1.7.0', dataDir: DATA_DIR,
   });
 }));
 api.get('/settings', (req, res) => {
@@ -162,6 +164,29 @@ api.post('/media/transcode', w(async (req, res) => {
 api.post('/media/probe', w(async (req, res) => res.json(await ren.probe(req.body?.file))));
 api.post('/media/frame', w(async (req, res) => res.json(await ren.frame(req.body || {}))));
 api.post('/media/segments', w(async (req, res) => res.json(await ren.speechSegments(req.body?.file, { noiseDb: req.body?.noiseDb, minPause: req.body?.minPause }))));
+
+// ---- Voiceover (ElevenLabs) ----
+api.get('/media/voiceover/status', w(async (req, res) => res.json(voice.status())));
+api.get('/media/voiceover/voices', w(async (req, res) => res.json(await voice.listVoices())));
+api.get('/media/voiceover/quota', w(async (req, res) => res.json(await voice.subscription())));
+api.get('/media/voiceover', w(async (req, res) => res.json(voice.listVoiceovers(Number(req.query.limit || 50)))));
+api.get('/media/voiceover/:id', w(async (req, res) => { const v = voice.getVoiceover(req.params.id); if (!v) return res.status(404).json({ error: 'not found' }); res.json(v); }));
+api.post('/media/voiceover', w(async (req, res) => res.json(await voice.speak(req.body || {}))));
+api.post('/media/voiceover/short', w(async (req, res) => {
+  const out = await voice.shortFromScript(req.body || {});
+  if (req.body?.render) { const job = ren.render(out.timeline); out.job = req.query.wait === '1' ? await ren.waitForJob(job.id) : job; }
+  res.json(out);
+}));
+
+// ---- Thumbnail maker ----
+api.get('/media/thumbnails/status', w(async (req, res) => res.json(thumbs.status())));
+api.get('/media/thumbnails', w(async (req, res) => res.json(thumbs.listSets(Number(req.query.limit || 20)))));
+api.get('/media/thumbnails/:id', w(async (req, res) => { const s = thumbs.getSet(req.params.id); if (!s) return res.status(404).json({ error: 'not found' }); res.json(s); }));
+api.post('/media/thumbnails', w(async (req, res) => res.json(await thumbs.makeSet(req.body || {}))));
+api.post('/media/thumbnails/compose', w(async (req, res) => res.json(await thumbs.compose(req.body || {}))));
+api.post('/media/thumbnails/ai', w(async (req, res) => res.json(await thumbs.hfImage(req.body || {}))));
+api.get('/media/thumbnails/:id/file/:n', w(async (req, res) => { const s = thumbs.getSet(req.params.id); const c = s?.candidates[Number(req.params.n)]; if (!c) return res.status(404).end(); res.sendFile(c.file); }));
+
 api.post('/media/captions', w(async (req, res) => {
   const { file, script, srt, maxWords } = req.body || {};
   if (srt) return res.json({ groups: ren.parseSrtGroups(srt) });
@@ -251,6 +276,7 @@ api.get('/outliers/local', (req, res) => {
 api.get('/outliers/search', w(async (req, res) => res.json(await disc.searchOutliers(req.query.q, { country: req.query.country || getSetting('default_country', 'US'), publishedWithinDays: Number(req.query.days || 90), maxSubscribers: req.query.maxSubs ? Number(req.query.maxSubs) : null, format: req.query.format || 'all', order: req.query.order || 'viewCount' }))));
 api.get('/trending', w(async (req, res) => res.json(await disc.trending({ country: req.query.country || getSetting('default_country', 'US'), categoryId: req.query.category || '' }))));
 api.get('/categories', w(async (req, res) => res.json(await disc.categories(req.query.country || getSetting('default_country', 'US')))));
+api.get('/channels/:id/similar-channels', w(async (req, res) => res.json(await disc.similarChannels(req.params.id, { country: req.query.country || getSetting('default_country', 'US'), limit: Number(req.query.limit || 25), queries: Number(req.query.queries || 3) }))));
 api.get('/niche/channels', w(async (req, res) => res.json(await disc.nicheChannels(req.query.q, { country: req.query.country || getSetting('default_country', 'US') }))));
 api.post('/titles/patterns', (req, res) => res.json(disc.titlePatterns(req.body.titles || [])));
 
@@ -480,6 +506,38 @@ api.get('/ext/video/:id', w(async (req, res) => {
   });
 }));
 // Channel page: public stats, est. monthly revenue, upload cadence, recent uploads with outlier multipliers.
+// YouTube Studio overlay: live scoring of the title/description/tags the user is typing on the video edit page.
+api.post('/ext/studio', w(async (req, res) => {
+  const { videoId = null, title = '', description = '', tags = [], keyword: kw = '' } = req.body || {};
+  const t = String(title || '').trim();
+  if (!t) return res.status(400).json({ error: 'title required' });
+  const keyword = String(kw || '').trim() || pack.titleSeed(t);
+  const owned = ch.listChannels('owned');
+  const known = videoId ? db.prepare('SELECT channel_id, view_count, published_at, is_short FROM videos WHERE id = ?').get(videoId) : null;
+  const channelId = known?.channel_id || owned[0]?.id || null;
+  const titleA = pack.analyzeTitle(t, { keyword }), descA = pack.analyzeDescription(description, { keyword });
+  const tagList = (Array.isArray(tags) ? tags : String(tags).split(',')).map(x => String(x).trim()).filter(Boolean);
+  const tagChars = tagList.join(',').length;
+  const tagChecks = [
+    { name: '8–20 tags', pass: tagList.length >= 8 && tagList.length <= 20, detail: `${tagList.length} tags` },
+    { name: 'Title keyword is a tag', pass: tagList.some(x => x.toLowerCase() === keyword.toLowerCase()), detail: keyword },
+    { name: 'Under 500 characters total', pass: tagChars <= 500, detail: `${tagChars} chars` },
+    { name: 'Has 2+ multi-word (long-tail) tags', pass: tagList.filter(x => x.includes(' ')).length >= 2, detail: `${tagList.filter(x => x.includes(' ')).length} long-tail` },
+  ];
+  const tagScore = Math.round(100 * tagChecks.filter(c => c.pass).length / tagChecks.length);
+  let radarRes = null, demand = null;
+  try { radarRes = await radar.scoreIdea({ channelId, variants: [{ title: t }], keyword, format: known?.is_short ? 'short' : 'long', ai: false, save: false }); } catch (e) { radarRes = { error: e.message }; }
+  try { demand = await scores.demandIndex(keyword, { country: getSetting('default_country', 'US') }); } catch (e) { demand = { error: e.message }; }
+  const r = radarRes?.variants?.[0] || null;
+  res.json({
+    videoId, channelId, keyword, isOwned: !!known,
+    title: titleA, description: descA, tags: { score: tagScore, checks: tagChecks, list: tagList },
+    seoScore: Math.round(titleA.score * 0.5 + descA.score * 0.3 + tagScore * 0.2),
+    radar: r ? { score: r.score, axes: r.axes, prediction: r.prediction, advice: r.advice || [], notes: radarRes.notes || [] } : radarRes,
+    demand: demand?.error ? demand : { index: demand.demandIndex, band: demand.band, components: demand.components, note: demand.note },
+    suggestedTags: (await pack.suggestTags({ title: t, description, keyword, country: getSetting('default_country', 'US') }).catch(() => ({ tags: [] })))?.tags?.slice(0, 15) || [],
+  });
+}));
 api.get('/ext/channel', w(async (req, res) => {
   const ref = String(req.query.ref || '').trim(); if (!ref) return res.status(400).json({ error: 'ref required' });
   const item = await ch.resolveChannel(ref);
@@ -600,7 +658,7 @@ const PUBLISH_SCHEMA = {
     returns: 'job {id, status, url (permalink), remote_id, log[], error}',
   },
   jobs: { list: 'GET /api/publish/jobs?platform=youtube|instagram', one: 'GET /api/publish/jobs/:id?wait=1&timeout=600', status: 'GET /api/publish/status' },
-  render: { method: 'POST', path: '/api/render?wait=1', body: 'timeline JSON — GET /api/render/schema', returns: 'job {id, status, output (absolute MP4 path), log[]}', tools: 'POST /api/media/transcode {file, preset: short|youtube|square|contain} · POST /api/media/probe {file} · POST /api/media/segments {file} · POST /api/media/captions {file, script[]} · POST /api/media/frame {file, at}' },
+  render: { method: 'POST', path: '/api/render?wait=1', body: 'timeline JSON — GET /api/render/schema', returns: 'job {id, status, output (absolute MP4 path), log[]}', tools: 'POST /api/media/transcode {file, preset: short|youtube|square|contain} · POST /api/media/probe {file} · POST /api/media/segments {file} · POST /api/media/captions {file, script[]} · POST /api/media/frame {file, at} · POST /api/media/voiceover {text} (ElevenLabs, word timings) · POST /api/media/thumbnails {file, title, headlines[]}' },
   mcp: 'Model Context Protocol server: `node mcp/server.js` (stdio). Register with `claude mcp add tubedesk -- node /path/to/tubedesk/mcp/server.js`.',
 };
 
@@ -660,6 +718,16 @@ AUTOPILOT, IDEAS, CTR, PHONE
   POST /api/autopilot/actions/:id/revert        put the original title/thumbnail back
   GET  /api/reach/:channelId                    impressions + CTR from the Reporting API (daily, ~2-day delay)
   POST /api/notify/test                         send a test alert to the configured phone channels
+
+VOICEOVER (ElevenLabs — your key in Settings → Voiceover) AND THUMBNAILS
+  POST /api/media/voiceover {"text":"script…","voiceId":"optional"}       → {"file":"/abs/vo.mp3","duration":12.4,"words":[{word,start,end}],"groups":[{text,start,end}]}
+       drop "groups" into a captions track and "file" into an audio track — word-accurate captions, no pause detection needed.
+  POST /api/media/voiceover/short?wait=1 {"text":"…","background":"/abs/clip.mp4","headline":"HOOK","render":true}
+       → voiceover + a ready 9:16 timeline (+ the rendered MP4 when render:true)
+  GET  /api/media/voiceover/voices · GET /api/media/voiceover/quota
+  POST /api/media/thumbnails {"file":"/abs/video.mp4","title":"…","headlines":["FREE VIDIQ|AT HOME","I CLONED IT"],"styles":["bold","contrast"],"frames":3,"ai":{"prompt":"optional Higgsfield background"}}
+       → candidates ranked 0–100 by the thumbnail critic (heuristic fallback) with file paths; publish the best with /api/publish/youtube "thumbnail" or POST /api/packaging/thumbnail/set {channelId, videoId, imagePath}.
+  GET  /api/channels/:id/similar-channels      channels that rank for your best titles, scored by overlap × size fit (VidIQ "similar channels")
 
 PUBLISH TO TIKTOK (connected account; unaudited apps post as private until TikTok approves the app)
   POST /api/publish/tiktok?wait=1   {"file":"/abs/path/short.mp4","title":"caption #tags","disclose":true}

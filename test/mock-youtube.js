@@ -31,6 +31,7 @@ const ptDay = ms => new Date(ms).toLocaleDateString('en-CA', { timeZone: 'Americ
 // Instagram reels: older ones form the baseline; tests add a fresh one to trigger a breakout.
 export const IG = { media: [{ id: 'IGR0000', caption: 'Reel 0: the form that saves $40K', ageH: 20, views: 1900 },
   ...Array.from({ length: 12 }, (_, i) => ({ id: 'IGR' + String(i + 1).padStart(4, '0'), caption: `Reel ${i + 1}: caregiving money tip`, ageH: 24 * (8 + i * 5), views: 2000 + ((i * 733) % 1500) }))] };
+export const EL = { mp3: Buffer.from([0xff, 0xfb, 0x90, 0x00, 0, 0, 0, 0]) }; // tests swap in a real MP3 when ffmpeg is present
 export const REPORTING = { jobs: [], days: 40, ctr: (i) => (i % 5 === 0 ? 8.5 : i === 1 ? 1.6 : 4.2) };
 // Video thumbnails are served by the mock itself so tests never touch the network.
 let THUMB_BASE = 'https://i.ytimg.com';
@@ -43,6 +44,32 @@ export function startMock(port = 0) {
     const q = Object.fromEntries(u.searchParams);
     calls.push({ path: u.pathname, q, method: req.method, auth: req.headers.authorization || null });
     const json = (o, code = 200) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(o)); };
+    // --- ElevenLabs (voiceover) ---
+    if (u.pathname.startsWith('/el/')) {
+      const p = u.pathname.slice(4);
+      if (req.headers['xi-api-key'] !== 'ELKEY') return json({ detail: { status: 'invalid_api_key', message: 'Invalid API key' } }, 401);
+      if (p === 'v1/voices') return json({ voices: [{ voice_id: 'V1', name: 'Rachel', category: 'premade', preview_url: 'https://x/p.mp3' }, { voice_id: 'V2', name: 'Sal', category: 'cloned' }] });
+      if (p === 'v1/user/subscription') return json({ tier: 'starter', character_count: 1200, character_limit: 30000, next_character_count_reset_unix: 1800000000 });
+      if (/^v1\/text-to-speech\/[^/]+\/with-timestamps$/.test(p)) {
+        let b = ''; req.on('data', d => b += d);
+        return req.on('end', () => {
+          const body = JSON.parse(b); calls.at(-1).elBody = body; calls.at(-1).voice = p.split('/')[2];
+          const text = body.text; const chars = [...text]; const st = [], en = [];
+          chars.forEach((c, i) => { st.push(+(i * 0.06).toFixed(3)); en.push(+((i + 1) * 0.06).toFixed(3)); });
+          return json({ audio_base64: EL.mp3.toString('base64'), alignment: { characters: chars, character_start_times_seconds: st, character_end_times_seconds: en } });
+        });
+      }
+      return json({ detail: 'unknown ' + p }, 404);
+    }
+    // --- Higgsfield (thumbnail backgrounds) ---
+    if (u.pathname.startsWith('/hf/')) {
+      const p = u.pathname.slice(4);
+      if (req.headers['hf-api-key'] !== 'HFKEY' || req.headers['hf-secret'] !== 'HFSECRET') return json({ detail: 'unauthorized' }, 401);
+      if (p.startsWith('v1/text2image/')) { let b = ''; req.on('data', d => b += d); return req.on('end', () => { calls.at(-1).hfBody = JSON.parse(b); json({ id: 'req1', status: 'queued' }); }); }
+      if (p === 'v1/requests/req1') { const n = calls.filter(c => c.path === '/hf/v1/requests/req1').length; return n < 2 ? json({ id: 'req1', status: 'in_progress' }) : json({ id: 'req1', status: 'completed', images: [{ url: `${THUMB_BASE}/hf-image.jpg` }] }); }
+      return json({ detail: 'unknown ' + p }, 404);
+    }
+    if (u.pathname === '/hf-image.jpg') { res.writeHead(200, { 'content-type': 'image/png' }); return res.end(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64')); }
     if (u.pathname.startsWith('/vi/')) { res.writeHead(200, { 'content-type': 'image/jpeg' }); return res.end(JPEG); }
     // --- YouTube Reporting API (reach reports: impressions + CTR) ---
     if (u.pathname.startsWith('/reporting/')) {

@@ -112,7 +112,7 @@ window.TD = (() => {
     { group: 'Research' },
     { path: '/keywords', label: 'Keywords' }, { path: '/outliers', label: 'Outliers' }, { path: '/trending', label: 'Trending & niches' }, { path: '/competitors', label: 'Competitors' }, { path: '/social', label: 'Instagram & TikTok' }, { path: '/boards', label: 'Boards & blueprints' },
     { group: 'Create' },
-    { path: '/radar', label: 'Virality radar' }, { path: '/packaging', label: 'Packaging' }, { path: '/coach', label: 'AI coach' }, { path: '/production', label: 'Production' }, { path: '/comments', label: 'Comments' },
+    { path: '/radar', label: 'Virality radar' }, { path: '/packaging', label: 'Packaging' }, { path: '/coach', label: 'AI coach' }, { path: '/production', label: 'Production' }, { path: '/studio', label: 'Studio' }, { path: '/comments', label: 'Comments' },
     { group: 'System' },
     { path: '/calculators', label: 'Calculators' }, { path: '/settings', label: 'Settings' },
   ];

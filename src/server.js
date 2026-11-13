@@ -48,6 +48,8 @@ app.use('/api', api);
 app.use(oauthCallback());
 app.use('/data/thumbs', express.static(path.join(DATA_DIR, 'thumbs')));
 app.use('/data/clips', express.static(path.join(DATA_DIR, 'clips')));
+app.use('/data/voiceovers', express.static(path.join(DATA_DIR, 'voiceovers')));
+app.use('/data/renders', express.static(path.join(DATA_DIR, 'renders')));
 app.use(express.static(path.join(__dirname, '..', 'public'), { extensions: ['html'] }));
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'index.html')));
 

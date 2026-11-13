@@ -42,3 +42,14 @@
 .td-chip .ok { color: #3fbf7f; } .td-chip .bad { color: #e8503a; } .td-chip .money { color: #5aa9ff; }
 .td-chip.muted { color: #7a8494; font-weight: 500; }
 ytd-compact-video-renderer .td-chip, ytd-reel-item-renderer .td-chip, ytm-shorts-lockup-view-model .td-chip { font-size: 10px; gap: 4px; padding: 1px 5px; }
+/* Studio overlay */
+.td-studio { margin: 0 0 16px; }
+.td-cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 10px; }
+.td-checks, .td-advice { list-style: none; margin: 0; padding: 0; font-size: 12px; }
+.td-checks li { display: flex; gap: 6px; padding: 2px 0; color: #aab2c0; }
+.td-checks li span { width: 14px; flex: none; font-weight: 700; }
+.td-checks li.ok span { color: #3fbf7f; } .td-checks li.bad span { color: #e8503a; }
+.td-checks em { color: #7a8494; font-style: normal; }
+.td-advice li { padding: 3px 0 3px 12px; border-left: 2px solid #f0b24a; margin: 3px 0; color: #e7eaf0; }
+.td-copy { cursor: pointer; } .td-copy:hover { border-color: #7a8494; }
+@media (max-width: 1100px) { .td-cols { grid-template-columns: 1fr; } }

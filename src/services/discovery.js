@@ -160,6 +160,32 @@ export async function nicheChannels(query, { country = 'US', sample = 25 } = {})
   return channels.map(c => ({ ...c, views_per_video: c.video_count ? c.view_count / c.video_count : 0, age_days: Math.round(daysSince(c.published_at)) })).sort((a, b) => b.subscriber_count - a.subscriber_count);
 }
 
+/** Channels like this one: take the channel's best-performing titles, search them, and rank the channels that keep showing up. */
+export async function similarChannels(channelId, { country = 'US', limit = 25, queries = 3 } = {}) {
+  const me = db.prepare('SELECT * FROM channels WHERE id = ?').get(channelId) || (await fetchChannelsByIds([channelId]))[0];
+  if (!me) throw new Error('channel not found');
+  const top = db.prepare('SELECT title, view_count FROM videos WHERE channel_id = ? ORDER BY view_count DESC LIMIT 12').all(channelId);
+  const stop = new Set(['this', 'that', 'with', 'from', 'your', 'what', 'when', 'into', 'about', 'they', 'them', 'have', 'will', 'just', 'like', 'make', 'made', 'most', 'more', 'than', 'then', 'over', 'after', 'before', 'these', 'those', 'their', 'there', 'here', 'every', 'should', 'could', 'would', 'shorts', 'video']);
+  const freq = {};
+  for (const t of top) for (const w of t.title.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/)) if (w.length > 3 && !stop.has(w)) freq[w] = (freq[w] || 0) + 1 + Math.log10(1 + (t.view_count || 0)) / 4;
+  const terms = Object.entries(freq).sort((a, b) => b[1] - a[1]).map(([w]) => w);
+  const qs = []; for (let i = 0; i < queries && terms.length; i++) qs.push(terms.slice(i * 2, i * 2 + 3).join(' ') || terms[0]);
+  if (!qs.length) qs.push(me.title);
+  const agg = {};
+  for (const q of qs) {
+    const sr = await ytGet('search.list', { part: 'snippet', q, type: 'video', regionCode: country, order: 'relevance', publishedAfter: new Date(Date.now() - 365 * 86400000).toISOString(), maxResults: 50 }, { ttl: DEFAULT_TTL.search });
+    for (const it of sr.items || []) { const cid = it.snippet?.channelId; if (!cid || cid === channelId) continue; const a = agg[cid] ||= { hits: 0, queries: new Set(), sample: [] }; a.hits++; a.queries.add(q); if (a.sample.length < 3) a.sample.push(it.snippet.title); }
+  }
+  const ids = Object.entries(agg).sort((a, b) => b[1].hits - a[1].hits).slice(0, 50).map(([id]) => id);
+  const channels = await fetchChannelsByIds(ids);
+  const tracked = new Set(db.prepare('SELECT competitor_channel_id FROM competitor_links WHERE owned_channel_id = ?').all(channelId).map(r => r.competitor_channel_id));
+  const mySubs = me.subscriber_count || 1;
+  return {
+    basedOn: { channel: me.title, queries: qs },
+    results: channels.map(c => { const a = agg[c.id]; const sizeFit = 1 - Math.min(1, Math.abs(Math.log10((c.subscriber_count || 1) / mySubs)) / 2); return { ...c, hits: a.hits, matchedQueries: [...a.queries], sampleTitles: a.sample, tracked: tracked.has(c.id), views_per_video: c.video_count ? Math.round(c.view_count / c.video_count) : 0, sizeFit: +sizeFit.toFixed(2), score: Math.round(a.hits * 10 * (0.5 + sizeFit)) }; }).sort((a, b) => b.score - a.score).slice(0, limit),
+  };
+}
+
 /** Similar videos for a given video: search its title words, exclude itself. */
 export async function similarVideos(videoId, { country = 'US' } = {}) {
   const v = db.prepare('SELECT * FROM videos WHERE id = ?').get(videoId) || (await fetchVideosByIds([videoId]))[0];

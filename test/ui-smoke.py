@@ -67,7 +67,7 @@ ROUTES = ['/', '/channels', '/library', '/analytics/overview', '/analytics/traff
           '/packaging/title?title=7%20Medicaid%20Rules', '/packaging/description', '/packaging/chapters', '/packaging/thumbnail', '/packaging/translate', '/packaging/health', '/packaging/staged', '/packaging/safety',
           '/coach/chat', '/coach/ideas', '/coach/audit', '/coach/plan', '/coach/validate', '/coach/beginner', '/coach/lessons', '/coach/context',
           '/production/script', '/production/transcript', '/production/clips', '/production/repurpose', '/production/hook', '/comments', '/comments?filter=questions', '/calculators', '/settings',
-          '/portfolio', '/radar/ideas', '/radar/score', '/radar/watch', '/radar/shorts', '/radar/autopilot', '/radar/calibration', '/radar/history', '/radar/method', '/social', '/social/outliers', '/social/hashtags?q=claudecode', '/social/tiktok']
+          '/portfolio', '/radar/ideas', '/radar/score', '/radar/watch', '/radar/shorts', '/radar/autopilot', '/radar/calibration', '/radar/history', '/radar/method', '/social', '/social/outliers', '/social/hashtags?q=claudecode', '/social/tiktok', '/studio', '/studio/thumbs', '/studio/similar']
 errors = []
 os.makedirs(os.path.join(ROOT, 'test', 'screenshots'), exist_ok=True)
 with sync_playwright() as p:

@@ -220,6 +220,17 @@ curl -X POST 'http://localhost:4949/api/render?wait=1' -H 'content-type: applica
 
 Helpers: `POST /api/media/transcode {file, preset: short|youtube|square|contain}`, `/api/media/probe`, `/api/media/segments` (speech start/end), `/api/media/captions` (word timings + caption groups for a script), `/api/media/frame`. Track reference: `GET /api/render/schema`. Renders land in `data/renders/` unless `output` is set.
 
+## Studio: voiceover, thumbnail maker, similar channels
+
+The last pieces vidIQ sells as "AI tools", on your own keys:
+
+- **Voiceover (ElevenLabs).** Settings → Voiceover → paste your API key. `POST /api/media/voiceover {text}` returns an MP3 plus every word's start/end from ElevenLabs' alignment and ready caption `groups` — drop them into a `captions` track and the words line up with the voice, no pause detection. `POST /api/media/voiceover/short {text, background, headline, render: true}` goes script → voice → 9:16 timeline → MP4 in one call. Voices and remaining characters: `/api/media/voiceover/voices`, `/quota`.
+- **Thumbnail maker.** `POST /api/media/thumbnails {file, title, headlines: ["FREE VIDIQ|AT HOME"], styles: ["bold","contrast"], frames: 3}` extracts frames from your own video, composes 1280×720 candidates in four styles, and ranks them with the thumbnail critic (heuristic when no AI provider is set). Optional `ai: {prompt}` adds a Higgsfield text→image background when a Higgsfield API key + secret are in Settings (uses your existing plan's credits). Files land in `data/thumbs/maker/` and can be used straight as `thumbnail` in `/api/publish/youtube`.
+- **Similar channels.** `GET /api/channels/:id/similar-channels` searches your best-performing title terms and ranks the channels that keep showing up, weighted by size fit, with one-click "+ competitor".
+- **YouTube Studio overlay.** The extension (v1.3) also runs on `studio.youtube.com`: on a video's Details page it scores the title, description and tags as you type (SEO checklist, radar score vs your history, keyword demand, tag suggestions). Nothing is saved until you press Save in Studio.
+
+MCP tools: `voiceover`, `voiceover_short`, `voiceover_voices`, `make_thumbnails`, `similar_channels`.
+
 ## Quota
 
 | Call | Units | Used by |

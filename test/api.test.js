@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { startMock, calls } from './mock-youtube.js';
+import { startMock, calls, EL } from './mock-youtube.js';
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'td-api-'));
 let mock, child, base;
@@ -23,7 +23,7 @@ before(async () => {
   mock = await startMock(0);
   const port = 4900 + Math.floor(Math.random() * 90);
   base = `http://127.0.0.1:${port}`;
-  child = spawn(process.execPath, ['src/server.js'], { cwd: path.join(path.dirname(new URL(import.meta.url).pathname), '..'), env: { ...process.env, PORT: String(port), TUBEDESK_DATA_DIR: dataDir, TUBEDESK_NO_SCHEDULER: '1', YT_API_BASE: `http://127.0.0.1:${mock.port}/youtube/v3`, YT_ANALYTICS_BASE: `http://127.0.0.1:${mock.port}/v2/reports`, YT_SUGGEST_URL: `http://127.0.0.1:${mock.port}/complete/search`, YT_UPLOAD_BASE: `http://127.0.0.1:${mock.port}/upload`, IG_GRAPH_BASE: `http://127.0.0.1:${mock.port}/ig`, TT_API_BASE: `http://127.0.0.1:${mock.port}/tt`, TT_AUTH_BASE: `http://127.0.0.1:${mock.port}/tt-auth` }, stdio: ['ignore', 'pipe', 'pipe'] });
+  child = spawn(process.execPath, ['src/server.js'], { cwd: path.join(path.dirname(new URL(import.meta.url).pathname), '..'), env: { ...process.env, PORT: String(port), TUBEDESK_DATA_DIR: dataDir, TUBEDESK_NO_SCHEDULER: '1', YT_API_BASE: `http://127.0.0.1:${mock.port}/youtube/v3`, YT_ANALYTICS_BASE: `http://127.0.0.1:${mock.port}/v2/reports`, YT_SUGGEST_URL: `http://127.0.0.1:${mock.port}/complete/search`, YT_UPLOAD_BASE: `http://127.0.0.1:${mock.port}/upload`, IG_GRAPH_BASE: `http://127.0.0.1:${mock.port}/ig`, TT_API_BASE: `http://127.0.0.1:${mock.port}/tt`, TT_AUTH_BASE: `http://127.0.0.1:${mock.port}/tt-auth`, EL_API_BASE: `http://127.0.0.1:${mock.port}/el`, HF_API_BASE: `http://127.0.0.1:${mock.port}/hf` }, stdio: ['ignore', 'pipe', 'pipe'] });
   child.stderr.on('data', d => process.stderr.write('[server] ' + d));
   for (let i = 0; i < 50; i++) { try { await fetch(base + '/api/status'); break; } catch { await new Promise(r => setTimeout(r, 100)); } }
 });
@@ -427,4 +427,69 @@ test('social: Instagram account research (business discovery), outliers, hashtag
   assert.ok(job.log.some(l => /not audited/.test(l)));
   const st = await ok('/publish/status'); assert.equal(st.tiktok.connected, true); assert.equal(st.tiktok.username, 'salstack');
   assert.equal((await ok('/social/tiktok/disconnect', { method: 'POST' })).connected, false);
+});
+
+const FFMPEG = ['/usr/local/bin/ffmpeg', '/usr/bin/ffmpeg', '/opt/homebrew/bin/ffmpeg'].find(p => fs.existsSync(p));
+test('voiceover: ElevenLabs words → caption groups; status, voices, quota; short timeline', async () => {
+  let r = await api('/media/voiceover', { method: 'POST', body: { text: 'hello' } }); assert.equal(r.status, 500); assert.ok(/not configured/.test(r.json.error));
+  await ok('/settings', { method: 'PUT', body: { elevenlabs_api_key: 'ELKEY', elevenlabs_voice_id: 'V2' } });
+  assert.equal((await ok('/settings')).elevenlabs_api_key, '••••LKEY');
+  const st = await ok('/media/voiceover/status'); assert.equal(st.configured, true); assert.equal(st.voice_id, 'V2');
+  const voices = await ok('/media/voiceover/voices'); assert.equal(voices.length, 2); assert.equal(voices[1].name, 'Sal');
+  const q = await ok('/media/voiceover/quota'); assert.equal(q.left, 28800);
+  if (FFMPEG) { const { execFileSync } = await import('node:child_process'); const mp3 = path.join(dataDir, 'fx.mp3'); execFileSync(FFMPEG, ['-y', '-loglevel', 'error', '-f', 'lavfi', '-i', "aevalsrc='0.3*sin(2*PI*220*t)':s=44100:d=3", '-c:a', 'libmp3lame', '-b:a', '64k', mp3]); EL.mp3 = fs.readFileSync(mp3); }
+  const v = await ok('/media/voiceover', { method: 'POST', body: { text: 'TubeDesk is free. It runs on your Mac.', speed: 1.05 } });
+  assert.equal(v.voice_id, 'V2'); assert.ok(fs.existsSync(v.file)); assert.equal(v.words.length, 8); assert.equal(v.words[0].word, 'TubeDesk'); assert.equal(v.words[0].start, 0); assert.ok(v.words[7].end > 2);
+  assert.ok(v.groups.length >= 2 && v.groups.every(g => g.text && g.end > g.start)); assert.deepEqual(v.lines, ['TubeDesk is free.', 'It runs on your Mac.']);
+  const el = calls.find(c => c.elBody); assert.equal(el.voice, 'V2'); assert.equal(el.elBody.voice_settings.speed, 1.05); assert.equal(el.elBody.model_id, 'eleven_multilingual_v2');
+  assert.equal((await ok('/media/voiceover')).length, 1); assert.equal((await ok('/media/voiceover/' + v.id)).words.length, 8);
+  r = await api('/media/voiceover', { method: 'POST', body: { text: 'x'.repeat(5001) } }); assert.equal(r.status, 500); assert.ok(/5,000/.test(r.json.error));
+  // timeline builder (no render)
+  r = await api('/media/voiceover/short', { method: 'POST', body: { text: 'Hi there.' } }); assert.equal(r.status, 500); assert.ok(/background/.test(r.json.error));
+  const still = path.join(dataDir, 'bg.png'); fs.writeFileSync(still, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64'));
+  const o = await ok('/media/voiceover/short', { method: 'POST', body: { text: 'Hi there. Welcome back.', background: still, headline: 'FREE VIDIQ' } });
+  assert.equal(o.timeline.width, 1080); assert.equal(o.timeline.tracks[0].type, 'image'); assert.equal(o.timeline.tracks[1].src, o.voiceover.file);
+  const cap = o.timeline.tracks.find(t => t.type === 'captions'); assert.ok(cap.groups.length >= 1); assert.equal(cap.groups[0].start, 0.3, 'captions shifted with the voice offset');
+  assert.equal(o.timeline.tracks.find(t => t.type === 'text').text, 'FREE VIDIQ');
+  if (FFMPEG) { const rr = await ok('/media/voiceover/short?wait=1', { method: 'POST', body: { text: 'Hi there.', background: still, render: true } }); assert.equal(rr.job.status, 'done', JSON.stringify(rr.job.log)); assert.ok(fs.existsSync(rr.job.output)); }
+});
+
+test('thumbnail maker: frames × headlines × styles ranked; Higgsfield background; set storage', { skip: !FFMPEG }, async () => {
+  const st = await ok('/media/thumbnails/status'); assert.equal(st.ffmpeg, true); assert.equal(st.higgsfield, false); assert.deepEqual(Object.keys(st.styles), ['bold', 'clean', 'alert', 'contrast']);
+  const { execFileSync } = await import('node:child_process');
+  const vidf = path.join(dataDir, 'thumbsrc.mp4'); execFileSync(FFMPEG, ['-y', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc=s=640x360:r=30:d=6', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', vidf]);
+  let r = await api('/media/thumbnails', { method: 'POST', body: {} }); assert.equal(r.status, 500);
+  const s = await ok('/media/thumbnails', { method: 'POST', body: { file: vidf, title: 'I cloned vidIQ for free', headlines: ['FREE VIDIQ|AT HOME', 'I CLONED IT FOR ZERO DOLLARS A MONTH'], styles: ['bold', 'contrast'], frames: 2, score: false } });
+  assert.equal(s.candidates.length, 8); assert.ok(s.candidates.every(c => fs.existsSync(c.file) && c.file.includes('/thumbs/maker/') && c.score >= 0));
+  assert.ok(s.candidates[0].score >= s.candidates.at(-1).score); assert.equal(s.candidates[0].scoredBy, 'heuristic');
+  assert.deepEqual(s.candidates.find(c => c.headline.includes('|')).lines, ['FREE VIDIQ', 'AT HOME']);
+  const short = s.candidates.find(c => c.lines[0] === 'FREE VIDIQ'), long = s.candidates.find(c => c.lines.join(' ').split(' ').length === 7);
+  assert.ok(short.score > long.score, 'shorter headline ranks higher');
+  assert.equal((await ok('/media/thumbnails')).length, 1); assert.equal((await ok('/media/thumbnails/' + s.id)).candidates.length, 8);
+  r = await fetch(base + '/api/media/thumbnails/' + s.id + '/file/0'); assert.equal(r.status, 200); assert.equal(r.headers.get('content-type'), 'image/jpeg');
+  // Higgsfield hook: not configured → skipped with a note; configured → polled, downloaded, used as top background
+  const s2 = await ok('/media/thumbnails', { method: 'POST', body: { file: vidf, headlines: ['HI'], styles: ['clean'], frames: 1, score: false, ai: { prompt: 'a red mac mini' } } });
+  assert.ok(s2.notes.some(n => /Higgsfield skipped/.test(n))); assert.equal(s2.candidates.length, 1);
+  await ok('/settings', { method: 'PUT', body: { higgsfield_api_key: 'HFKEY', higgsfield_api_secret: 'HFSECRET' } });
+  assert.equal((await ok('/media/thumbnails/status')).higgsfield, true);
+  const s3 = await ok('/media/thumbnails', { method: 'POST', body: { file: vidf, headlines: ['HI'], styles: ['clean'], frames: 1, score: false, ai: { prompt: 'a red mac mini' } } });
+  assert.equal(s3.notes.length, 0, JSON.stringify(s3.notes)); assert.equal(s3.candidates.length, 2); assert.equal(s3.candidates[0].source, 'higgsfield');
+  const hf = calls.find(c => c.hfBody); assert.ok(/red mac mini/.test(hf.hfBody.params.prompt)); assert.equal(hf.hfBody.params.aspect_ratio, '16:9');
+  assert.ok(calls.filter(c => c.path === '/hf/v1/requests/req1').length >= 2, 'polled until completed');
+});
+
+test('similar channels + Studio overlay scoring endpoint', async () => {
+  const chans = await ok('/channels'); const owned = chans.find(c => c.kind === 'owned');
+  const sim = await ok(`/channels/${owned.id}/similar-channels?limit=10`);
+  assert.ok(sim.basedOn.queries.length >= 1 && sim.basedOn.queries.length <= 3); assert.ok(sim.results.length >= 1);
+  assert.ok(!sim.results.some(c => c.id === owned.id), 'excludes itself'); assert.ok(sim.results[0].hits >= 1 && typeof sim.results[0].sizeFit === 'number' && sim.results[0].score >= sim.results.at(-1).score);
+  assert.ok(sim.results.every(c => Array.isArray(c.sampleTitles) && 'tracked' in c));
+  let r = await api('/ext/studio', { method: 'POST', body: { title: '' } }); assert.equal(r.status, 400);
+  const st = await ok('/ext/studio', { method: 'POST', body: { videoId: 'zzzzzzzzzzz', title: 'Medicaid lookback: the 5 year rule explained', description: 'Short.', tags: ['medicaid', 'medicaid lookback'] } });
+  assert.equal(st.isOwned, false); assert.equal(st.channelId, owned.id); assert.ok(st.title.score > 0 && st.title.checks.length > 5); assert.ok(st.description.checks.length >= 5);
+  assert.equal(st.tags.list.length, 2); assert.ok(st.tags.checks.find(c => c.name === '8–20 tags').pass === false); assert.ok(st.seoScore >= 0 && st.seoScore <= 100);
+  assert.ok(typeof st.demand.index === 'number' && st.demand.band); assert.ok(st.radar && (typeof st.radar.score === 'number' || st.radar.score === null || st.radar.error), JSON.stringify(st.radar).slice(0, 200));
+  assert.ok(Array.isArray(st.suggestedTags));
+  const guide = await (await fetch(base + '/api/agent')).text(); assert.ok(/media\/voiceover/.test(guide) && /media\/thumbnails/.test(guide) && /similar-channels/.test(guide));
+  assert.equal((await ok('/status')).version, '1.7.0');
 });
