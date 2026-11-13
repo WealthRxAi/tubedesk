@@ -23,7 +23,7 @@ before(async () => {
   mock = await startMock(0);
   const port = 4900 + Math.floor(Math.random() * 90);
   base = `http://127.0.0.1:${port}`;
-  child = spawn(process.execPath, ['src/server.js'], { cwd: path.join(path.dirname(new URL(import.meta.url).pathname), '..'), env: { ...process.env, PORT: String(port), TUBEDESK_DATA_DIR: dataDir, TUBEDESK_NO_SCHEDULER: '1', YT_API_BASE: `http://127.0.0.1:${mock.port}/youtube/v3`, YT_ANALYTICS_BASE: `http://127.0.0.1:${mock.port}/v2/reports`, YT_SUGGEST_URL: `http://127.0.0.1:${mock.port}/complete/search`, YT_UPLOAD_BASE: `http://127.0.0.1:${mock.port}/upload`, IG_GRAPH_BASE: `http://127.0.0.1:${mock.port}/ig` }, stdio: ['ignore', 'pipe', 'pipe'] });
+  child = spawn(process.execPath, ['src/server.js'], { cwd: path.join(path.dirname(new URL(import.meta.url).pathname), '..'), env: { ...process.env, PORT: String(port), TUBEDESK_DATA_DIR: dataDir, TUBEDESK_NO_SCHEDULER: '1', YT_API_BASE: `http://127.0.0.1:${mock.port}/youtube/v3`, YT_ANALYTICS_BASE: `http://127.0.0.1:${mock.port}/v2/reports`, YT_SUGGEST_URL: `http://127.0.0.1:${mock.port}/complete/search`, YT_UPLOAD_BASE: `http://127.0.0.1:${mock.port}/upload`, IG_GRAPH_BASE: `http://127.0.0.1:${mock.port}/ig`, TT_API_BASE: `http://127.0.0.1:${mock.port}/tt`, TT_AUTH_BASE: `http://127.0.0.1:${mock.port}/tt-auth` }, stdio: ['ignore', 'pipe', 'pipe'] });
   child.stderr.on('data', d => process.stderr.write('[server] ' + d));
   for (let i = 0; i < 50; i++) { try { await fetch(base + '/api/status'); break; } catch { await new Promise(r => setTimeout(r, 100)); } }
 });
@@ -386,4 +386,45 @@ test('media pipeline: probe, segments, caption timing, timeline render, transcod
   const fr = await ok('/media/frame', { method: 'POST', body: { file: out, at: 0.5, width: 270 } }); assert.ok(fs.existsSync(fr.file));
   assert.equal((await api('/render', { method: 'POST', body: { tracks: [] } })).status, 400);
   assert.equal((await ok('/render/jobs')).length, 2);
+});
+
+
+test('social: Instagram account research (business discovery), outliers, hashtags; TikTok connect, videos, publish', async () => {
+  await ok('/settings', { method: 'PUT', body: { ig_access_token: 'IGTOKEN', ig_user_id: '17841400000000001' } });
+  // lookup + track
+  const look = await ok('/social/ig/lookup?username=@mrbeast');
+  assert.equal(look.username, 'mrbeast'); assert.equal(look.followers, 120000); assert.equal(look.media.length, 10);
+  let r = await api('/social/ig/accounts', { method: 'POST', body: { username: 'nobody' } }); assert.equal(r.status, 400); assert.ok(/professional/.test(r.json.error));
+  const t = await ok('/social/ig/accounts', { method: 'POST', body: { username: 'https://www.instagram.com/creatorone/', note: 'niche' } });
+  assert.equal(t.username, 'creatorone'); assert.equal(t.synced, 10); assert.equal(t.note, 'niche');
+  await ok('/social/ig/accounts', { method: 'POST', body: { username: 'creatortwo' } });
+  const list = await ok('/social/ig/accounts'); assert.equal(list.length, 2); assert.ok(list[0].stats.medianEngagement > 0); assert.ok(list[0].stats.engagementRate > 0);
+  // outliers: post #2 of each account has 9400 engagement vs ~310 median
+  const out = await ok('/social/ig/outliers?days=90&minX=2');
+  assert.equal(out.length, 2, JSON.stringify(out.map(o => [o.username, o.id, o.x, o.engagement]))); assert.ok(out[0].x > 20, 'x=' + out[0].x); assert.equal(out[0].engagement, 9400);
+  assert.equal((await ok('/social/ig/outliers?days=90&minX=2&username=creatorone')).length, 1);
+  // hashtag (cached on second call)
+  const ht = await ok('/social/ig/hashtag?q=%23claudecode'); assert.equal(ht.tag, 'claudecode'); assert.equal(ht.media.length, 5); assert.equal(ht.media[0].engagement, 5050); assert.ok(!ht.cached);
+  assert.equal((await ok('/social/ig/hashtag?q=claudecode')).cached, true);
+  // untrack
+  assert.equal((await ok('/social/ig/accounts/creatortwo', { method: 'DELETE' })).removed, true);
+  assert.equal((await ok('/social/ig/accounts')).length, 1);
+  // tiktok: not configured → 400; configure → auth url → connect with code → me/videos → publish
+  r = await api('/social/tiktok/auth-url'); assert.equal(r.status, 400);
+  await ok('/settings', { method: 'PUT', body: { tt_client_key: 'awkey', tt_client_secret: 'secret', tt_redirect_uri: 'https://example.test/tiktok-callback.html' } });
+  const au = await ok('/social/tiktok/auth-url'); assert.ok(au.url.includes('client_key=awkey') && au.url.includes('scope=user.info.basic'));
+  const con = await ok('/social/tiktok/connect', { method: 'POST', body: { code: `https://example.test/tiktok-callback.html?code=abc123&state=${au.state}` } });
+  assert.equal(con.username, 'salstack'); assert.equal(con.followers, 1500);
+  assert.equal(calls.find(c => c.path.endsWith('/tt/oauth/token/')).ttBody.code, 'abc123');
+  assert.equal((await ok('/settings')).tt_client_secret, '••••cret', 'secret masked');
+  assert.equal((await ok('/social/tiktok/sync', { method: 'POST' })).synced, 3);
+  const vids = await ok('/social/tiktok/videos'); assert.equal(vids.length, 3); assert.equal(vids.find(v => v.id === 'v2').x, 50, 'x vs median');
+  const vid = path.join(dataDir, 'tt.mp4'); fs.writeFileSync(vid, Buffer.alloc(120000, 3));
+  const job = await ok('/publish/tiktok?wait=1', { method: 'POST', body: { file: vid, title: 'hello #tiktok', disclose: true } });
+  assert.equal(job.status, 'done', JSON.stringify(job.log)); assert.equal(job.url, 'https://www.tiktok.com/@salstack/video/7000000000000000001');
+  const init = calls.find(c => c.ttInit); assert.equal(init.ttInit.post_info.privacy_level, 'PUBLIC_TO_EVERYONE'); assert.equal(init.ttInit.post_info.is_aigc, true); assert.equal(init.ttInit.source_info.video_size, 120000);
+  const up = calls.find(c => c.path === '/tt-upload'); assert.equal(up.ttBytes, 120000); assert.equal(up.range, 'bytes 0-119999/120000');
+  assert.ok(job.log.some(l => /not audited/.test(l)));
+  const st = await ok('/publish/status'); assert.equal(st.tiktok.connected, true); assert.equal(st.tiktok.username, 'salstack');
+  assert.equal((await ok('/social/tiktok/disconnect', { method: 'POST' })).connected, false);
 });

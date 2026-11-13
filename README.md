@@ -187,6 +187,22 @@ claude mcp add tubedesk -- node /path/to/tubedesk/mcp/server.js
 
 No dependencies; it proxies the local TubeDesk server. Tools: `render_video`, `media_transcode`, `media_probe`, `speech_segments`, `caption_timing`, `extract_frame`, `render_job`, `publish_youtube`, `publish_instagram`, `publish_job`, `publish_status`, `list_channels`, `channel_videos`, `keyword_research`, `outliers`, `radar_score`, `radar_watch`, `radar_calibrate`, `daily_ideas`, `autopilot`, `ctr_report`, `tubedesk_api`.
 
+## Instagram & TikTok research and publishing
+
+Everything here uses official APIs — nothing is scraped.
+
+- **Instagram research** (Business Discovery, same token as publishing): track any professional (Creator/Business) account by username — public profile, followers (with daily history), last 50 posts with likes/comments. The **Outliers** tab ranks tracked accounts' posts against their own median engagement (Instagram does not expose other accounts' view counts). **Hashtags**: top/recent media for a tag with engagement and reel share (Instagram allows 30 unique tags per 7 days; cached a day). One-off lookups don't need tracking.
+- **TikTok** (Login Kit + Display + Content Posting APIs): connect your account once through a free TikTok developer app — TubeDesk uses a paste-the-code flow because TikTok refuses localhost redirects; host `docs/tiktok-callback.html` on any domain you own. Then: your videos with views/likes/comments/shares and × vs your median, and `POST /api/publish/tiktok`. Until TikTok audits your app, new posts are forced to "Only me" — flip them public in the TikTok app, and tick "audited" in Settings once approved. Other creators' TikTok data has no official API (the Research API is academics-only), so TubeDesk doesn't offer it.
+
+```bash
+curl -X POST localhost:4949/api/social/ig/accounts -H 'content-type: application/json' -d '{"username":"creator"}'
+curl 'localhost:4949/api/social/ig/outliers?days=90&minX=2&reels=1'
+curl 'localhost:4949/api/social/ig/hashtag?q=claudecode'
+curl -X POST 'localhost:4949/api/publish/tiktok?wait=1' -H 'content-type: application/json' -d '{"file":"/abs/short.mp4","title":"caption #tag","disclose":true}'
+```
+
+MCP tools: `ig_track_account`, `ig_lookup`, `ig_outliers`, `ig_hashtag`, `tiktok_videos`, `publish_tiktok`.
+
 ## Media pipeline (ffmpeg): render from a JSON timeline
 
 Describe the video as data and get an MP4 back — the timeline is the project file. Tracks: `video` (with `in`, `crop`, `focus`, `zoom`, `freeze`), `image` (Ken Burns via `zoom`/`focus`), `box`, `text`, `captions` (from `groups`, an `.srt`, or a `script` auto-timed against the voice by pause detection), `audio` (`duck: true` compresses it under the voice), `tone` (thump/click/riser). Output is H.264/AAC with loudness normalized to `loudness` LUFS. Requires `ffmpeg` (`brew install ffmpeg`).

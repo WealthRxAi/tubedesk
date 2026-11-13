@@ -82,6 +82,14 @@ export function startMock(port = 0) {
     if (u.pathname.includes('/ig/')) {
       const p = u.pathname.split('/ig/')[1];
       if (p === 'me') return json({ id: '17841400000000001', username: 'salstack.ai', account_type: 'BUSINESS', media_count: 12 });
+      if (p === '17841400000000001' && /business_discovery/.test(q.fields || '')) {
+        const u = (q.fields.match(/username\(([^)]+)\)/) || [])[1];
+        if (u === 'nobody') return json({ error: { message: '(#110) Could not find the user', code: 110 } }, 400);
+        const media = Array.from({ length: 10 }, (_, i) => ({ id: `bd_${u}_${i}`, caption: `post ${i} #ai`, media_type: i % 3 === 0 ? 'IMAGE' : 'VIDEO', media_product_type: i % 3 === 0 ? 'FEED' : 'REELS', timestamp: new Date(Date.now() - i * 2 * 86400e3).toISOString().replace(/\.\d{3}Z$/, '+0000'), permalink: `https://www.instagram.com/p/${u}${i}/`, thumbnail_url: 'https://example.test/t.jpg', like_count: i === 2 ? 9000 : 300 + i, comments_count: i === 2 ? 400 : 10 }));
+        return json({ business_discovery: { id: 'bd1', username: u, name: 'Creator ' + u, biography: 'bio', website: 'https://x.test', profile_picture_url: 'https://example.test/p.jpg', followers_count: 120000, follows_count: 50, media_count: 321, media: { data: media } } });
+      }
+      if (p === 'ig_hashtag_search') return json({ data: [{ id: 'HT_' + q.q }] });
+      if (/^HT_.*\/(top|recent)_media$/.test(p)) return json({ data: Array.from({ length: 5 }, (_, i) => ({ id: `ht${i}`, caption: `#${q.q || 'tag'} post ${i}`, media_type: 'VIDEO', media_product_type: 'REELS', permalink: `https://www.instagram.com/p/ht${i}/`, timestamp: new Date().toISOString().replace(/\.\d{3}Z$/, '+0000'), like_count: 1000 * (i + 1), comments_count: 50 })) });
       if (p === 'refresh_access_token') return json({ access_token: 'IG_REFRESHED', token_type: 'bearer', expires_in: 5184000 });
       if (p.endsWith('/media') && req.method === 'GET') return json({ data: IG.media.map(m => ({ id: m.id, caption: m.caption, media_type: 'VIDEO', media_product_type: 'REELS', timestamp: new Date(Date.now() - m.ageH * 3600000).toISOString().replace(/\.\d+Z$/, '+0000'), permalink: `https://www.instagram.com/reel/${m.id}/`, thumbnail_url: `${THUMB_BASE}/vi/${m.id}/ig.jpg`, like_count: Math.round(m.views * 0.05), comments_count: Math.round(m.views * 0.004) })).slice(0, Number(q.limit || 25)) });
       if (/\/insights$/.test(p)) { const m = IG.media.find(x => x.id === p.split('/')[0]); if (!m) return json({ error: { message: 'no media' } }, 400); return json({ data: [['views', m.views], ['reach', Math.round(m.views * 0.7)], ['saved', Math.round(m.views * 0.01)], ['shares', Math.round(m.views * 0.008)], ['total_interactions', Math.round(m.views * 0.07)]].map(([name, v]) => ({ name, period: 'lifetime', values: [{ value: v }] })) }); }
@@ -91,6 +99,23 @@ export function startMock(port = 0) {
       if (p === 'IGMEDIA1') return json({ permalink: 'https://www.instagram.com/reel/ABC123/' });
       return json({ error: { message: 'unknown ig path ' + p } }, 400);
     }
+    if (u.pathname.includes('/tt/')) {
+      const p = u.pathname.split('/tt/')[1];
+      let b = ''; req.on('data', d => b += d);
+      return req.on('end', () => {
+        const body = (() => { try { return JSON.parse(b || '{}'); } catch { return Object.fromEntries(new URLSearchParams(b)); } })();
+        calls.at(-1).ttBody = body;
+        if (p === 'oauth/token/') return json({ access_token: 'TT_ACCESS_' + (body.grant_type || ''), refresh_token: 'TT_REFRESH', open_id: 'open123', expires_in: 86400, scope: 'user.info.basic,video.list,video.publish' });
+        if (!/^Bearer TT_ACCESS_/.test(req.headers.authorization || '')) return json({ error: { code: 'access_token_invalid', message: 'bad token' } }, 401);
+        if (p === 'user/info/') return json({ data: { user: { open_id: 'open123', username: 'salstack', display_name: 'SalStack', follower_count: 1500, following_count: 10, likes_count: 9000, video_count: 3 } }, error: { code: 'ok' } });
+        if (p === 'video/list/') return json({ data: { videos: [1, 2, 3].map(i => ({ id: 'v' + i, title: 'tt ' + i, create_time: Math.floor(Date.now() / 1000) - i * 86400 * 3, duration: 30, cover_image_url: 'https://example.test/c.jpg', share_url: 'https://www.tiktok.com/@salstack/video/v' + i, view_count: i === 2 ? 50000 : 1000, like_count: 100, comment_count: 5, share_count: 7 })), cursor: 0, has_more: false }, error: { code: 'ok' } });
+        if (p === 'post/publish/creator_info/query/') return json({ data: { creator_username: 'salstack', privacy_level_options: ['PUBLIC_TO_EVERYONE', 'SELF_ONLY'], max_video_post_duration_sec: 600 }, error: { code: 'ok' } });
+        if (p === 'post/publish/video/init/') { calls.at(-1).ttInit = body; return json({ data: { publish_id: 'pub1', upload_url: `http://127.0.0.1:${server.address().port}/tt-upload` }, error: { code: 'ok' } }); }
+        if (p === 'post/publish/status/fetch/') return json({ data: { status: 'PUBLISH_COMPLETE', publicaly_available_post_id: ['7000000000000000001'] }, error: { code: 'ok' } });
+        return json({ error: { code: 'not_found', message: 'unknown ' + p } }, 404);
+      });
+    }
+    if (u.pathname === '/tt-upload') { let n = 0; req.on('data', d => n += d.length); return req.on('end', () => { calls.at(-1).ttBytes = n; calls.at(-1).range = req.headers['content-range']; res.writeHead(201); res.end(); }); }
     if (u.pathname.endsWith('/complete/search')) { res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify([q.q, [q.q + ' explained', q.q + ' for beginners', 'how does ' + q.q + ' work', q.q + ' 2026', q.q + ' vs trust'].map(s => [s])])); }
     if (u.pathname.endsWith('/reports')) {
       const dims = (q.dimensions || '').split(',').filter(Boolean);

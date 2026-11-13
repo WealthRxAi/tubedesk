@@ -22,7 +22,8 @@ for _ in range(50):
     try: api('/status'); break
     except Exception: time.sleep(0.2)
 OWNER = 'UCowner00000000000000001'
-api('/settings', 'PUT', {'yt_api_key': 'K', 'google_client_id': 'c', 'google_client_secret': 's', 'ai_provider': 'none'})
+api('/settings', 'PUT', {'yt_api_key': 'K', 'google_client_id': 'c', 'google_client_secret': 's', 'ai_provider': 'none', 'ig_access_token': 'IGTOKEN', 'ig_user_id': '17841400000000001'})
+api('/social/ig/accounts', 'POST', {'username': 'creatorone'})
 api('/channels', 'POST', {'input': '@TheParentPlan', 'kind': 'owned'})
 api(f'/competitors/{OWNER}', 'POST', {'input': '@CaregiverMoney'})
 db = sqlite3.connect(os.path.join(data, 'tubedesk.sqlite'))
@@ -66,7 +67,7 @@ ROUTES = ['/', '/channels', '/library', '/analytics/overview', '/analytics/traff
           '/packaging/title?title=7%20Medicaid%20Rules', '/packaging/description', '/packaging/chapters', '/packaging/thumbnail', '/packaging/translate', '/packaging/health', '/packaging/staged', '/packaging/safety',
           '/coach/chat', '/coach/ideas', '/coach/audit', '/coach/plan', '/coach/validate', '/coach/beginner', '/coach/lessons', '/coach/context',
           '/production/script', '/production/transcript', '/production/clips', '/production/repurpose', '/production/hook', '/comments', '/comments?filter=questions', '/calculators', '/settings',
-          '/portfolio', '/radar/ideas', '/radar/score', '/radar/watch', '/radar/shorts', '/radar/autopilot', '/radar/calibration', '/radar/history', '/radar/method']
+          '/portfolio', '/radar/ideas', '/radar/score', '/radar/watch', '/radar/shorts', '/radar/autopilot', '/radar/calibration', '/radar/history', '/radar/method', '/social', '/social/outliers', '/social/hashtags?q=claudecode', '/social/tiktok']
 errors = []
 os.makedirs(os.path.join(ROOT, 'test', 'screenshots'), exist_ok=True)
 with sync_playwright() as p:

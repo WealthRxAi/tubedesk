@@ -6,7 +6,7 @@
 import readline from 'node:readline';
 
 const BASE = (process.env.TUBEDESK_URL || 'http://localhost:4949').replace(/\/$/, '');
-const VERSION = '1.5.0';
+const VERSION = '1.6.0';
 
 async function call(method, path, body) {
   const res = await fetch(BASE + path, { method, headers: body ? { 'content-type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
@@ -39,6 +39,13 @@ const TOOLS = [
       file: { type: 'string', description: 'Absolute path on this machine' }, kind: { type: 'string', enum: ['reel', 'image'], default: 'reel' }, caption: { type: 'string', maxLength: 2200 },
       shareToFeed: { type: 'boolean', default: true }, cover: { type: 'string', description: 'Absolute path to a JPG/PNG cover (reels)' }, thumbOffsetMs: { type: 'integer' },
       collaborators: { type: 'array', items: { type: 'string' } }, locationId: { type: 'string' }, wait: { type: 'boolean', default: true } } } },
+  { name: 'publish_tiktok', description: 'Upload and publish a video (MP4/MOV/WebM) from this machine to the connected TikTok account. Until TikTok audits the app, the post is private ("Only me"). Returns the job with the URL when wait=true (default).',
+    inputSchema: { type: 'object', required: ['file'], properties: { file: { type: 'string' }, title: { type: 'string', description: 'caption, hashtags allowed, ≤2200 chars' }, privacy: { type: 'string', enum: ['PUBLIC_TO_EVERYONE', 'MUTUAL_FOLLOW_FRIENDS', 'FOLLOWER_OF_CREATOR', 'SELF_ONLY'] }, allowComment: { type: 'boolean', default: true }, allowDuet: { type: 'boolean', default: false }, allowStitch: { type: 'boolean', default: false }, disclose: { type: 'boolean', description: 'AI-generated content label' }, wait: { type: 'boolean', default: true } } } },
+  { name: 'ig_track_account', description: 'Track a professional Instagram account (Creator/Business) by username: public profile, followers, last 50 posts with likes/comments; kept locally and re-synced daily for outlier detection.', inputSchema: { type: 'object', required: ['username'], properties: { username: { type: 'string' }, note: { type: 'string' } } } },
+  { name: 'ig_lookup', description: 'One-off public lookup of a professional Instagram account (profile + recent posts) without tracking it.', inputSchema: { type: 'object', required: ['username'], properties: { username: { type: 'string' }, limit: { type: 'integer', default: 25 } } } },
+  { name: 'ig_outliers', description: 'Instagram posts from tracked accounts that beat their own account\'s median engagement (likes+comments) by ≥ minX — the vidIQ outlier idea for Instagram. Views are not public on other accounts, so engagement is the signal.', inputSchema: { type: 'object', properties: { days: { type: 'integer', default: 90 }, minX: { type: 'number', default: 1.5 }, reelsOnly: { type: 'boolean', default: false }, username: { type: 'string' }, limit: { type: 'integer', default: 50 } } } },
+  { name: 'ig_hashtag', description: 'Instagram hashtag research: top or recent media for a hashtag with engagement, reel share and median engagement (Instagram allows 30 unique hashtags per 7 days; results are cached 24h).', inputSchema: { type: 'object', required: ['tag'], properties: { tag: { type: 'string' }, kind: { type: 'string', enum: ['top', 'recent'], default: 'top' } } } },
+  { name: 'tiktok_videos', description: 'Your TikTok videos (connected account) with views, likes, comments, shares, views/day and × vs your median. sync=true pulls fresh numbers first.', inputSchema: { type: 'object', properties: { sync: { type: 'boolean', default: false }, limit: { type: 'integer', default: 50 } } } },
   { name: 'publish_job', description: 'Get a publish job by id (status queued|running|done|failed, url, log). Set wait=true to block until it finishes.',
     inputSchema: { type: 'object', required: ['id'], properties: { id: { type: 'string' }, wait: { type: 'boolean', default: false }, timeoutSeconds: { type: 'integer', default: 600 } } } },
   { name: 'publish_status', description: 'Publishing readiness: authorized YouTube channels, uploads left today, Instagram configuration, recent jobs.', inputSchema: { type: 'object', properties: {} } },
@@ -88,6 +95,12 @@ async function runTool(name, a = {}) {
     case 'render_job': return call('GET', `/api/render/jobs/${encodeURIComponent(a.id)}${q({ wait: a.wait ? 1 : undefined, timeout: 3600 })}`);
     case 'publish_youtube': { const { wait = true, ...body } = a; return call('POST', `/api/publish/youtube${wait ? '?wait=1&timeout=1800' : ''}`, body); }
     case 'publish_instagram': { const { wait = true, ...body } = a; return call('POST', `/api/publish/instagram${wait ? '?wait=1&timeout=1800' : ''}`, body); }
+    case 'publish_tiktok': { const { wait = true, ...body } = a; return call('POST', `/api/publish/tiktok${wait ? '?wait=1&timeout=1800' : ''}`, body); }
+    case 'ig_track_account': return call('POST', '/api/social/ig/accounts', { username: a.username, note: a.note });
+    case 'ig_lookup': return call('GET', `/api/social/ig/lookup${q({ username: a.username, limit: a.limit })}`);
+    case 'ig_outliers': return call('GET', `/api/social/ig/outliers${q({ days: a.days, minX: a.minX, reels: a.reelsOnly ? 1 : undefined, username: a.username, limit: a.limit })}`);
+    case 'ig_hashtag': return call('GET', `/api/social/ig/hashtag${q({ q: a.tag, kind: a.kind })}`);
+    case 'tiktok_videos': { if (a.sync) await call('POST', '/api/social/tiktok/sync', {}); return call('GET', `/api/social/tiktok/videos${q({ limit: a.limit })}`); }
     case 'publish_job': return call('GET', `/api/publish/jobs/${encodeURIComponent(a.id)}${q({ wait: a.wait ? 1 : undefined, timeout: a.timeoutSeconds })}`);
     case 'publish_status': return call('GET', '/api/publish/status');
     case 'list_channels': return call('GET', `/api/channels${q({ kind: a.kind })}`);

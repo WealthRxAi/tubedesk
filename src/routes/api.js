@@ -19,6 +19,7 @@ import * as stats from '../services/stats.js';
 import * as estimate from '../services/estimate.js';
 import * as exp from '../services/export.js';
 import * as pub from '../services/publish.js';
+import * as social from '../services/social.js';
 import * as ren from '../services/render.js';
 import * as radar from '../services/radar.js';
 import * as notifier from '../services/notify.js';
@@ -34,7 +35,7 @@ import { runDailySnapshot } from '../jobs/scheduler.js';
 
 export const api = Router();
 const w = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
-const SECRET_KEYS = ['yt_api_key', 'google_client_secret', 'anthropic_api_key', 'ig_access_token', 'notify_webhook_url', 'notify_ntfy_topic'];
+const SECRET_KEYS = ['yt_api_key', 'google_client_secret', 'anthropic_api_key', 'ig_access_token', 'notify_webhook_url', 'notify_ntfy_topic', 'tt_client_secret', 'tt_access_token', 'tt_refresh_token'];
 
 // ---------- status & settings ----------
 api.get('/status', w(async (req, res) => {
@@ -42,7 +43,7 @@ api.get('/status', w(async (req, res) => {
   res.json({
     configured: { apiKey: !!s.yt_api_key, oauth: !!(s.google_client_id && s.google_client_secret) },
     ai: await ai.status(), quota: quotaToday(), channels: ch.listChannels().length,
-    lastSnapshot: s.last_snapshot ? JSON.parse(s.last_snapshot) : null, version: '1.5.0', dataDir: DATA_DIR,
+    lastSnapshot: s.last_snapshot ? JSON.parse(s.last_snapshot) : null, version: '1.6.0', dataDir: DATA_DIR,
   });
 }));
 api.get('/settings', (req, res) => {
@@ -94,6 +95,32 @@ api.post('/publish/youtube', w(async (req, res) => {
   if (req.body._slot) job = { ...job, slot: req.body._slot };
   res.status(job.status === 'failed' ? 502 : 200).json(job);
 }));
+api.post('/publish/tiktok', w(async (req, res) => {
+  let job;
+  try { job = pub.publishTikTok(req.body || {}); } catch (e) { return res.status(400).json({ error: e.message }); }
+  if (req.query.wait === '1' || req.body?.wait === true) job = await pub.waitForJob(job.id, Number(req.query.timeout || 900) * 1000);
+  res.status(job.status === 'failed' ? 502 : 200).json(job);
+}));
+
+// ---------- social research: Instagram accounts/hashtags (Business Discovery), TikTok account ----------
+api.get('/social/status', (req, res) => res.json(social.status()));
+api.get('/social/ig/accounts', (req, res) => res.json(social.listAccounts()));
+api.post('/social/ig/accounts', w(async (req, res) => { try { res.json(await social.trackAccount(req.body?.username, { note: req.body?.note })); } catch (e) { res.status(400).json({ error: e.message }); } }));
+api.delete('/social/ig/accounts/:username', (req, res) => res.json({ removed: social.untrackAccount(req.params.username) }));
+api.post('/social/ig/accounts/:username/sync', w(async (req, res) => res.json(await social.syncAccount(req.params.username))));
+api.post('/social/ig/sync', w(async (req, res) => res.json(await social.syncAllAccounts())));
+api.get('/social/ig/accounts/:username/media', (req, res) => res.json(social.igOutliers({ days: 3650, minX: 0, limit: Number(req.query.limit || 50), username: req.params.username })));
+api.get('/social/ig/lookup', w(async (req, res) => { try { res.json(await social.igDiscover(req.query.username, { limit: Number(req.query.limit || 25) })); } catch (e) { res.status(400).json({ error: e.message }); } }));
+api.get('/social/ig/outliers', (req, res) => res.json(social.igOutliers({ days: Number(req.query.days || 90), minX: Number(req.query.minX || 1.5), limit: Number(req.query.limit || 50), username: req.query.username || null, reelsOnly: req.query.reels === '1' })));
+api.get('/social/ig/hashtag', w(async (req, res) => { try { res.json(await social.igHashtag(req.query.q, { kind: req.query.kind || 'top', limit: Number(req.query.limit || 50) })); } catch (e) { res.status(400).json({ error: e.message }); } }));
+api.get('/social/tiktok/status', (req, res) => res.json(social.tiktokStatus()));
+api.get('/social/tiktok/auth-url', (req, res) => { try { res.json(social.tiktokAuthUrl()); } catch (e) { res.status(400).json({ error: e.message }); } });
+api.post('/social/tiktok/connect', w(async (req, res) => { try { res.json(await social.tiktokConnect(req.body?.code)); } catch (e) { res.status(400).json({ error: e.message }); } }));
+api.post('/social/tiktok/disconnect', (req, res) => { for (const k of ['tt_access_token', 'tt_refresh_token', 'tt_open_id', 'tt_username', 'tt_display_name', 'tt_access_expires_at']) setSetting(k, ''); res.json({ connected: false }); });
+api.get('/social/tiktok/me', w(async (req, res) => res.json(await social.tiktokMe())));
+api.post('/social/tiktok/sync', w(async (req, res) => res.json(await social.tiktokSyncVideos({ max: Number(req.body?.max || 100) }))));
+api.get('/social/tiktok/videos', (req, res) => res.json(social.tiktokVideos({ limit: Number(req.query.limit || 50) })));
+
 api.post('/publish/instagram', w(async (req, res) => {
   let job;
   // Instagram has no scheduling API: a future publishAt (or "best") goes into TubeDesk's publish queue.
@@ -634,6 +661,17 @@ AUTOPILOT, IDEAS, CTR, PHONE
   GET  /api/reach/:channelId                    impressions + CTR from the Reporting API (daily, ~2-day delay)
   POST /api/notify/test                         send a test alert to the configured phone channels
 
+PUBLISH TO TIKTOK (connected account; unaudited apps post as private until TikTok approves the app)
+  POST /api/publish/tiktok?wait=1   {"file":"/abs/path/short.mp4","title":"caption #tags","disclose":true}
+
+INSTAGRAM & TIKTOK RESEARCH (official APIs)
+  POST /api/social/ig/accounts {"username":"creator"}   track a professional IG account (profile + last 50 posts)
+  GET  /api/social/ig/accounts · GET /api/social/ig/outliers?days=90&minX=1.5&reels=1   posts beating their own account's median
+  GET  /api/social/ig/lookup?username=creator           one-off public profile + recent posts (not tracked)
+  GET  /api/social/ig/hashtag?q=tag&kind=top|recent     hashtag top/recent media (30 unique tags per 7 days)
+  GET  /api/social/tiktok/videos · POST /api/social/tiktok/sync   your TikTok videos with views/likes/shares and × vs median
+  (TikTok has no official API for other people's videos; TubeDesk does not scrape.)
+
 CHECK LATER
   GET /api/publish/jobs/:id        GET /api/render/jobs/:id        GET /api/publish/jobs        GET /api/publish/status
 
@@ -647,5 +685,5 @@ OTHER USEFUL READS
   GET /api/publish/schema                        this contract as JSON
   GET /api/radar/axes                            what each radar axis measures and how the score is built
 
-MCP (Claude Code, Cursor, any MCP client): node mcp/server.js  — tools: render_video, media_transcode, media_probe, speech_segments, caption_timing, extract_frame, render_job, publish_youtube, publish_instagram, publish_job, publish_status, list_channels, channel_videos, keyword_research, outliers, radar_score, radar_watch, radar_calibrate, tubedesk_api (any GET/POST).
+MCP (Claude Code, Cursor, any MCP client): node mcp/server.js  — tools: render_video, media_transcode, media_probe, speech_segments, caption_timing, extract_frame, render_job, publish_youtube, publish_instagram, publish_tiktok, ig_track_account, ig_lookup, ig_outliers, ig_hashtag, tiktok_videos, publish_job, publish_status, list_channels, channel_videos, keyword_research, outliers, radar_score, radar_watch, radar_calibrate, tubedesk_api (any GET/POST).
 `;

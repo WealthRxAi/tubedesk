@@ -10,6 +10,7 @@ import * as ideas from '../services/ideas.js';
 import * as clips from '../services/clips.js';
 import * as portfolio from '../services/portfolio.js';
 import * as igwatch from '../services/igwatch.js';
+import * as social from '../services/social.js';
 import { aiAvailable } from '../services/radar.js';
 
 let running = null;
@@ -64,6 +65,8 @@ export function startAutopilotJobs(tz) {
   if (cron.validate(reachExpr)) cron.schedule(reachExpr, async () => {
     await reach.syncAll().then(r => console.log('[reach]', r)).catch(e => console.error('[reach]', e.message));
     if (igwatch.configured()) await igwatch.syncMedia({ limit: 25 }).catch(e => console.error('[instagram]', e.message)); // baseline for the reel radar
+    if (igwatch.configured()) await social.syncAllAccounts().catch(e => console.error('[instagram accounts]', e.message)); // tracked accounts → outliers + follower history
+    if (social.tiktokStatus().connected) await social.tiktokSyncVideos().catch(e => console.error('[tiktok]', e.message));
   }, { timezone: tz });
   // Publish queue (scheduled Shorts / Instagram posts) every 5 minutes; weekly summary Monday morning.
   cron.schedule('*/5 * * * *', () => clips.processQueue().catch(e => console.error('[queue]', e.message)), { timezone: tz });

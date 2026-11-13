@@ -360,6 +360,21 @@ export async function publicLease(files, log) {
 }
 export function tunnelActive() { return !!tunnel?.url; }
 
+/** Publish a video to TikTok as a job (see social.tiktokPublish). */
+export function publishTikTok(params = {}) {
+  const file = resolveFile(params.file, VIDEO_EXT);
+  const title = String(params.title || '').slice(0, 2200);
+  const id = createJob('tiktok', file, title.slice(0, 80), { ...params, file: undefined });
+  runJob(id, async log => {
+    const { tiktokPublish } = await import('./social.js');
+    const r = await tiktokPublish({ ...params, file, title, log });
+    return { id: r.id, url: r.url };
+  });
+  return getJob(id);
+}
+
 export function status() {
-  return { youtube: youtubeStatus(), instagram: instagramStatus(), jobs: listJobs({ limit: 10 }), day: today() };
+  let tiktok = { configured: false, connected: false };
+  try { const st = db.prepare("SELECT key, value FROM settings WHERE key IN ('tt_client_key','tt_refresh_token','tt_username','tt_audited')").all(); const m = Object.fromEntries(st.map(r => [r.key, r.value])); tiktok = { configured: !!m.tt_client_key, connected: !!m.tt_refresh_token, username: m.tt_username || null, audited: m.tt_audited === '1' }; } catch { /* settings table shape */ }
+  return { youtube: youtubeStatus(), instagram: instagramStatus(), tiktok, jobs: listJobs({ limit: 10 }), day: today() };
 }
