@@ -163,6 +163,16 @@ curl localhost:4949/api/portfolio
 curl -X POST 'localhost:4949/api/publish/youtube?wait=1' -H 'content-type: application/json' -d '{"file":"/abs/v.mp4","title":"…","publishAt":"best","format":"long"}'
 ```
 
+
+## TubeDesk inside Claude (plugin)
+
+Like vidIQ's Claude connector, but on your own data and free. The plugin adds TubeDesk's tools plus five workflows — video ideas, packaging (titles/thumbnails/hook scored on the radar), channel checkup, publishing, and Shorts — so you can just ask Claude "what should my next video be?" or "post this at the best time".
+
+- **Claude desktop app:** Settings → *TubeDesk inside Claude* → **Download the plugin**, drag `tubedesk.plugin` into a chat, press Install.
+- **Claude Code:** `/plugin marketplace add WealthRxAi/tubedesk` then `/plugin install tubedesk@tubedesk`.
+
+TubeDesk must be running on the same Mac. Details: [plugin/README.md](plugin/README.md).
+
 ## Publishing (YouTube + Instagram) — built for AI agents
 
 TubeDesk can post for you, so any model that can call HTTP or run a command on your machine (Claude Code, Cursor, Codex, ChatGPT, Gemini, Grok, a cron script) can publish without browser automation:

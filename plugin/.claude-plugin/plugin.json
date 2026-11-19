@@ -1,0 +1,21 @@
+{
+  "name": "tubedesk",
+  "version": "1.8.0",
+  "description": "Your self-hosted TubeDesk inside Claude: YouTube keyword research, outliers, radar-scored ideas, title/thumbnail scoring, live breakout watch, CTR, autopilot, Shorts, rendering, voiceovers, thumbnails, and publishing to YouTube, Instagram and TikTok — all from your own Mac, free.",
+  "author": {
+    "name": "WealthRx AI"
+  },
+  "homepage": "https://github.com/WealthRxAi/tubedesk",
+  "repository": "https://github.com/WealthRxAi/tubedesk",
+  "license": "MIT",
+  "keywords": [
+    "youtube",
+    "vidiq",
+    "creator",
+    "shorts",
+    "instagram",
+    "tiktok",
+    "analytics",
+    "thumbnails"
+  ]
+}
