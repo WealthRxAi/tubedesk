@@ -124,12 +124,15 @@ async function deliver(row, c = config()) {
 }
 
 /** Queue a phone notification; sends now unless quiet hours (then it is held and flushed later). */
-export async function notify({ kind = 'info', title, body = '', url = null, force = false }) {
+export async function notify({ kind = 'info', title, body = '', url = null, force = false, secret = null }) {
   const c = config();
   if (!force && !c.kinds.includes(kind)) return { skipped: 'kind not enabled for phone' };
   if (!channelsConfigured(c).length) return { skipped: 'no phone channel configured' };
-  const r = db.prepare('INSERT INTO notify_log (kind, title, body, url, status) VALUES (?, ?, ?, ?, ?)').run(kind, String(title).slice(0, 300), String(body || '').slice(0, 1500), url, 'queued');
-  const row = db.prepare('SELECT * FROM notify_log WHERE id = ?').get(r.lastInsertRowid);
+  // `secret` (e.g. an approval code) is delivered but never stored: the log keeps a redacted copy.
+  const redact = s => (secret ? String(s).split(String(secret)).join('••••••') : String(s));
+  const r = db.prepare('INSERT INTO notify_log (kind, title, body, url, status) VALUES (?, ?, ?, ?, ?)').run(kind, redact(title).slice(0, 300), redact(body || '').slice(0, 1500), url, 'queued');
+  const row = { ...db.prepare('SELECT * FROM notify_log WHERE id = ?').get(r.lastInsertRowid), title: String(title).slice(0, 300), body: String(body || '').slice(0, 1500) };
+  if (secret) return { id: row.id, ...(await deliver(row, c)) }; // time-critical, never held
   if (!force && inQuietHours(new Date(), c.quiet)) { db.prepare("UPDATE notify_log SET status = 'held' WHERE id = ?").run(row.id); return { held: true, id: row.id }; }
   return { id: row.id, ...(await deliver(row, c)) };
 }

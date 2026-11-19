@@ -507,5 +507,5 @@ test('similar channels + Studio overlay scoring endpoint', async () => {
   assert.ok(typeof st.demand.index === 'number' && st.demand.band); assert.ok(st.radar && (typeof st.radar.score === 'number' || st.radar.score === null || st.radar.error), JSON.stringify(st.radar).slice(0, 200));
   assert.ok(Array.isArray(st.suggestedTags));
   const guide = await (await fetch(base + '/api/agent')).text(); assert.ok(/media\/voiceover/.test(guide) && /media\/thumbnails/.test(guide) && /similar-channels/.test(guide));
-  assert.equal((await ok('/status')).version, '1.8.0');
+  assert.equal((await ok('/status')).version, '1.9.0');
 });

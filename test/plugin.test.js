@@ -55,7 +55,7 @@ test('manifest, marketplace and skills are well-formed and versioned with TubeDe
 });
 
 test('the bundled MCP server is the repo one', () => {
-  assert.equal(fs.readFileSync(path.join(PLUGIN, 'mcp', 'server.js'), 'utf8'), read('mcp/server.js'), 'run npm run plugin');
+  for (const f of ['server.js', 'tools.js']) assert.equal(fs.readFileSync(path.join(PLUGIN, 'mcp', f), 'utf8'), read('mcp/' + f), `plugin/mcp/${f} is stale: run npm run plugin`);
 });
 
 test('every tool the skills name exists, and every API route they name exists', async () => {
@@ -93,5 +93,5 @@ test('TubeDesk serves the plugin for the Claude desktop app', async () => {
   assert.equal(buf.subarray(0, 2).toString(), 'PK');
   const f = path.join(dataDir, 'dl.plugin'); fs.writeFileSync(f, buf);
   const list = execFileSync('unzip', ['-l', f]).toString();
-  for (const p of ['.claude-plugin/plugin.json', '.mcp.json', 'mcp/server.js', 'skills/tubedesk/SKILL.md', 'skills/publish-video/SKILL.md']) assert.ok(list.includes(p), p);
+  for (const p of ['.claude-plugin/plugin.json', '.mcp.json', 'mcp/server.js', 'mcp/tools.js', 'skills/tubedesk/SKILL.md', 'skills/publish-video/SKILL.md']) assert.ok(list.includes(p), p);
 });

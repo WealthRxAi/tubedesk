@@ -35,8 +35,10 @@ import * as portfolio from '../services/portfolio.js';
 import * as transcribe from '../services/transcribe.js';
 import * as igwatch from '../services/igwatch.js';
 import { runDailySnapshot } from '../jobs/scheduler.js';
+import { setup } from './setup.js';
 
 export const api = Router();
+api.use(setup); // setup checklist, validated settings, tools/OpenAPI, remote access — and the guard for remote callers
 const w = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 const SECRET_KEYS = ['yt_api_key', 'google_client_secret', 'anthropic_api_key', 'ig_access_token', 'notify_webhook_url', 'notify_ntfy_topic', 'tt_client_secret', 'tt_access_token', 'tt_refresh_token', 'elevenlabs_api_key', 'heygen_api_key', 'higgsfield_api_key', 'higgsfield_api_secret'];
 
@@ -46,7 +48,7 @@ api.get('/status', w(async (req, res) => {
   res.json({
     configured: { apiKey: !!s.yt_api_key, oauth: !!(s.google_client_id && s.google_client_secret) },
     ai: await ai.status(), quota: quotaToday(), channels: ch.listChannels().length,
-    lastSnapshot: s.last_snapshot ? JSON.parse(s.last_snapshot) : null, version: '1.8.0', dataDir: DATA_DIR,
+    lastSnapshot: s.last_snapshot ? JSON.parse(s.last_snapshot) : null, version: '1.9.0', dataDir: DATA_DIR,
   });
 }));
 api.get('/settings', (req, res) => {
@@ -145,12 +147,28 @@ api.post('/publish/instagram/test', w(async (req, res) => res.json(await pub.ins
 api.post('/publish/instagram/refresh-token', w(async (req, res) => res.json(await pub.refreshInstagramToken({ force: true }))));
 // Machine-readable contract so any model can publish without reading the source.
 api.get('/publish/schema', (req, res) => res.json(PUBLISH_SCHEMA));
-api.get('/agent', (req, res) => res.type('text/plain').send(AGENT_GUIDE));
+/** Every registered /api route, read from the router itself, so the guide can never miss one. */
+export function routeList() {
+  const out = [];
+  const walk = (stack, prefix = '') => {
+    for (const l of stack) {
+      if (l.route) for (const m of Object.keys(l.route.methods)) out.push(`${m.toUpperCase().padEnd(6)} /api${prefix}${l.route.path}`);
+      else if (l.handle?.stack) walk(l.handle.stack, prefix);
+    }
+  };
+  walk(api.stack);
+  return [...new Set(out)];
+}
+api.get('/agent', (req, res) => res.type('text/plain').send(AGENT_GUIDE + `
+
+ALL ROUTES (generated from the server — every one is callable with tubedesk_api or plain HTTP on this Mac)
+${routeList().map(r => '  ' + r).join('\n')}
+`));
 // The Claude plugin (skills + this machine's MCP server), zipped on the fly for the Claude desktop app.
 api.get('/plugin/download', (req, res) => {
   const dir = path.join(path.dirname(new URL(import.meta.url).pathname), '..', '..', 'plugin');
   if (!fs.existsSync(path.join(dir, '.claude-plugin', 'plugin.json'))) return res.status(404).json({ error: 'plugin folder missing — update TubeDesk' });
-  fs.copyFileSync(path.join(dir, '..', 'mcp', 'server.js'), path.join(dir, 'mcp', 'server.js')); // always ship the current MCP server
+  for (const f of ['server.js', 'tools.js']) fs.copyFileSync(path.join(dir, '..', 'mcp', f), path.join(dir, 'mcp', f)); // always ship the current MCP server
   const zip = spawn('zip', ['-qr', '-', '.', '-x', '*.DS_Store'], { cwd: dir });
   res.setHeader('content-type', 'application/zip');
   res.setHeader('content-disposition', 'attachment; filename="tubedesk.plugin"');
@@ -676,6 +694,19 @@ const PUBLISH_SCHEMA = {
 
 const AGENT_GUIDE = `TubeDesk — agent guide (plain text)
 Base URL: http://localhost:${process.env.PORT || 4949}  (local only; no auth needed from this machine)
+
+SET TUBEDESK UP (an AI can do all of it; only Google/TikTok consent clicks are manual)
+  GET  /api/setup                                 checklist: what's configured, what's missing, the exact next step
+  GET  /api/config?group=youtube                  settings with meaning, type, allowed values (secrets masked)
+  PUT  /api/config  {"yt_api_key":"…","timezone":"America/New_York"}   validated; unknown keys rejected
+  GET  /api/setup/connect/google|tiktok|instagram  consent link or steps for an account
+  POST /api/tools/<tool>  {…}                     every MCP tool over plain HTTP (GET /api/tools lists them; GET /api/openapi.json)
+
+USE TUBEDESK FROM ANY AI (ChatGPT, Claude web/phone, Gemini, Grok, n8n)
+  Remote access goes through Tailscale Funnel to a separate listener that only serves MCP/OAuth/tools behind tokens.
+  MCP connector URL:  <public url>/mcp   (OAuth with an approval code sent to the owner's phone)
+  OpenAPI (GPT Actions / function calling):  <public url>/openapi.json   (?for=gpt = 30 core tools), header Authorization: Bearer <API key>
+  GET  /api/remote/status · POST /api/remote/enable · POST /api/remote/keys {"name":"…"}   (Mac only)
 
 PUBLISH A VIDEO TO YOUTUBE
   POST /api/publish/youtube?wait=1

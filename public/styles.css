@@ -205,3 +205,6 @@ details summary{cursor:pointer}
 .pf-card .pf-head{display:flex;gap:10px;align-items:center;margin-bottom:10px}
 .pf-card .pf-head img{width:40px;height:40px;border-radius:50%;background:var(--bg3)}
 .pf-bar{height:6px;border-radius:3px;background:var(--bg3);overflow:hidden;margin-top:3px}.pf-bar i{display:block;height:100%;background:var(--accent)}
+
+code.copy{cursor:pointer}
+code.copy:hover{outline:1px solid var(--accent)}

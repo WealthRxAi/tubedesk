@@ -11,7 +11,7 @@ const ROOT = path.join(path.dirname(new URL(import.meta.url).pathname), '..');
 const PLUGIN = path.join(ROOT, 'plugin');
 const version = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
 
-fs.copyFileSync(path.join(ROOT, 'mcp', 'server.js'), path.join(PLUGIN, 'mcp', 'server.js'));
+for (const f of ['server.js', 'tools.js']) fs.copyFileSync(path.join(ROOT, 'mcp', f), path.join(PLUGIN, 'mcp', f));
 const manifestPath = path.join(PLUGIN, '.claude-plugin', 'plugin.json');
 const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
 manifest.version = version;

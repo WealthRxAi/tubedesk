@@ -15,7 +15,7 @@ Ask Claude things like:
 
 | Component | Purpose |
 |---|---|
-| MCP server `tubedesk` | 37 tools: research, radar, analytics, autopilot, rendering, voiceover, thumbnails, Shorts, publishing, Instagram/TikTok research, plus `tubedesk_api` for any route |
+| MCP server `tubedesk` | 43 tools: setup and configuration, research, radar, analytics, autopilot, rendering, voiceover, thumbnails, Shorts, publishing, Instagram/TikTok research, plus `tubedesk_api` for any route |
 | Skill `tubedesk` | How Claude operates TubeDesk: channel selection, quota, honest radar reading, publishing rules |
 | Skill `video-ideas` | Evidence-backed, radar-scored video ideas |
 | Skill `package-video` | Titles, thumbnails and hook, scored and refined |
@@ -36,4 +36,6 @@ TubeDesk must be installed and running on the same Mac (`./install-mac.sh` in th
 
 TubeDesk on another port or machine: set `TUBEDESK_URL` in `.mcp.json`.
 
-`mcp/server.js` here is a copy of the repo's `mcp/server.js`; `npm run plugin` keeps them identical (a test fails if they drift).
+`mcp/server.js` and `mcp/tools.js` here are copies of the repo's; `npm run plugin` keeps them identical (a test fails if they drift).
+
+Using ChatGPT, Claude on the web or phone, Gemini or Grok instead? Those connect to TubeDesk's own HTTPS endpoint — see the main README, *Use TubeDesk from any AI*.

@@ -164,6 +164,23 @@ curl -X POST 'localhost:4949/api/publish/youtube?wait=1' -H 'content-type: appli
 ```
 
 
+## Use TubeDesk from any AI
+
+Like vidIQ, TubeDesk works inside the AI you already use — ChatGPT, Claude (web, phone, desktop, Code), Gemini, Grok, Cursor, Codex, n8n — and the AI can **set TubeDesk up for you**: ask it to "set up TubeDesk" and it checks `setup_status`, fills in settings with `update_settings`, adds your channels and competitors, and hands you the one consent link it can't click for you.
+
+**On this Mac** nothing else is needed: the Claude plugin (below), or any MCP client with `node /path/to/tubedesk/mcp/server.js`, or plain HTTP `POST http://localhost:4949/api/tools/<tool>` (`GET /api/openapi.json`).
+
+**From anywhere** (ChatGPT, Claude on the web or phone, Gemini, Grok): TubeDesk gets one permanent private address through **Tailscale Funnel** (free).
+1. Install Tailscale once: `brew install --cask tailscale`, open it, sign in.
+2. Settings → *Use TubeDesk from any AI* → **Turn on remote access** (Tailscale asks once to allow Funnel for the Mac).
+3. Add the **MCP connector URL** (`https://<your-mac>.<tailnet>.ts.net/mcp`) to your AI app:
+   - Claude: Settings → Connectors → Add custom connector.
+   - ChatGPT: Settings → Apps & Connectors → Advanced → Developer mode → Create (OAuth). A custom GPT can instead import `…/openapi.json?for=gpt` as an Action with an API key.
+   - Gemini CLI / Grok / n8n / scripts: the MCP URL or `…/openapi.json` with `Authorization: Bearer <API key>` (create keys in the same card).
+4. The app asks you to approve: TubeDesk texts you an **8-digit code** (or press Approve in Settings on the Mac). Connected apps and keys can be disconnected any time.
+
+How it stays safe: Funnel forwards to a **separate listener** (port 4950) that only serves the MCP endpoint, OAuth sign-in, the OpenAPI spec and tool calls — the app, its settings page and the raw API are never reachable from outside. Every call needs an approved token (PKCE, rotating refresh tokens, replay revokes the app) or an API key; tokens are stored only as hashes. Remote apps can't change program paths, network or alert settings, manage access, or write files outside your media folders; video timelines are validated so they can't smuggle extra ffmpeg filters; and the Mac's own port refuses requests from other websites (CSRF and DNS-rebinding protection).
+
 ## TubeDesk inside Claude (plugin)
 
 Like vidIQ's Claude connector, but on your own data and free. The plugin adds TubeDesk's tools plus five workflows — video ideas, packaging (titles/thumbnails/hook scored on the radar), channel checkup, publishing, and Shorts — so you can just ask Claude "what should my next video be?" or "post this at the best time".

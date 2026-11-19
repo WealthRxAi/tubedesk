@@ -7,7 +7,7 @@ description: >
   "best time to post" — or mentions TubeDesk, vidIQ-style research, the virality radar, or the TubeDesk tools.
   It explains how to drive the user's self-hosted TubeDesk through its MCP tools.
 metadata:
-  version: "1.8.0"
+  version: "1.9.0"
 ---
 
 # Operating TubeDesk
@@ -17,6 +17,8 @@ TubeDesk is the user's own YouTube growth desk running on their Mac (default `ht
 ## First call in a session
 
 Call `list_channels` (owned channels first) before channel-specific work, unless the channel is already known in this conversation. Most tools default to the first owned channel when `channelId` is omitted — pass `channelId` explicitly whenever the user has more than one owned channel and the request names one. Match the channel the user means by title or handle; ask only when it is genuinely ambiguous.
+
+If anything looks unconfigured (missing API key, no owned channel, channel not connected), call `setup_status` and work through its `next` steps: set values with `update_settings`, add channels with `add_channel`, and give the user the consent link from `connect_account` — opening that link on the Mac is the only step they do by hand.
 
 If a tool returns "TubeDesk isn't running", say so in one line and give the restart command from the error. Do not fall back to guessing numbers.
 
@@ -31,6 +33,7 @@ If a tool returns "TubeDesk isn't running", say so in one line and give the rest
 | Production | `voiceover`, `voiceover_short`, `render_video`, `media_transcode`, `media_probe`, `caption_timing`, `speech_segments`, `extract_frame`, `make_shorts` |
 | Publishing | `publish_status`, `best_publish_time`, `publish_youtube`, `publish_instagram`, `publish_tiktok`, `publish_job` |
 | Instagram / TikTok research | `ig_lookup`, `ig_track_account`, `ig_outliers`, `ig_hashtag`, `tiktok_videos` |
+| Setup & configuration | `setup_status` (checklist + next step), `get_settings`, `update_settings`, `add_channel`, `connect_account`, `test_notification`, `remote_access` |
 | Anything else | `tubedesk_api` (`GET /api/agent` lists every route) |
 
 Workflows with exact steps live in the sibling skills: video-ideas, package-video, channel-checkup, publish-video, make-shorts. Load the matching one when the request fits.
