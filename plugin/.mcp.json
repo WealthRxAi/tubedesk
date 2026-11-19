@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "tubedesk": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/server.js"],
+      "env": { "TUBEDESK_URL": "http://localhost:4949" }
+    }
+  }
+}

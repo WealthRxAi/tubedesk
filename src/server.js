@@ -6,6 +6,8 @@ import { api, oauthCallback } from './routes/api.js';
 import { startScheduler } from './jobs/scheduler.js';
 import { servePublic, recoverJobs } from './services/publish.js';
 import { recoverAfterRestart } from './services/clips.js';
+import { createPublicApp } from './public-server.js';
+import { remotePort } from './services/remote.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -27,7 +29,23 @@ app.use((req, res, next) => {
   const local = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
   const proxied = !!(req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for']);
   if (proxied && !req.path.startsWith('/public/media/')) return res.status(403).send('Not available through the public URL.');
-  if (!local && getSetting('allow_lan', '0') !== '1') return res.status(403).send('TubeDesk only accepts local connections (set allow_lan=1 in Settings to expose on your LAN).');
+  const lan = getSetting('allow_lan', '0') === '1';
+  if (!local && !lan) return res.status(403).send('TubeDesk only accepts local connections (set allow_lan=1 in Settings to expose on your LAN).');
+  // DNS rebinding: a web page can point its own hostname at 127.0.0.1. Only answer requests addressed to this machine.
+  const host = String(req.headers.host || '').toLowerCase();
+  if (!lan && !/^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(host)) return res.status(421).send('Unexpected Host header.');
+  // CSRF: browsers send Origin on cross-site requests. State-changing requests must come from TubeDesk's own pages,
+  // the browser extension or youtube.com (extension content scripts); local tools (curl, MCP, scripts) send no Origin.
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
+    const origin = req.headers.origin;
+    const site = req.headers['sec-fetch-site'];
+    let sameOrigin = false;
+    try { sameOrigin = !!origin && new URL(origin).host.toLowerCase() === host; } catch { /* malformed */ }
+    const trustedOrigin = !origin || sameOrigin || /^(chrome|moz)-extension:\/\//.test(origin) || /^https:\/\/(www\.)?youtube\.com$/.test(origin);
+    if (!trustedOrigin || (site === 'cross-site' && !sameOrigin && !/^(chrome|moz)-extension:|^https:\/\/(www\.)?youtube\.com$/.test(origin || ''))) return res.status(403).json({ error: 'Cross-site request refused.' });
+  }
+  // Calls relayed for remote AI apps may only use the API (which applies its own remote rules).
+  if (req.headers['x-tubedesk-origin'] === 'remote' && !req.path.startsWith('/api/')) return res.status(403).json({ error: 'Remote apps can only use the TubeDesk API.' });
   next();
 });
 
@@ -60,3 +78,11 @@ app.listen(PORT, '0.0.0.0', () => {
   try { recoverJobs(); recoverAfterRestart(); } catch (e) { console.error('restart recovery:', e.message); }
   if (process.env.TUBEDESK_NO_SCHEDULER !== '1') startScheduler();
 });
+
+// The public listener for remote AI apps (Tailscale Funnel forwards here). Loopback only: nothing on the network can
+// reach it except through the tunnel, and it serves only MCP/OAuth/tool routes, all behind tokens.
+if (process.env.TUBEDESK_NO_PUBLIC !== '1') {
+  const pport = remotePort();
+  createPublicApp().listen(pport, '127.0.0.1', () => console.log(`TubeDesk AI endpoint on http://127.0.0.1:${pport} (public through Tailscale Funnel when enabled)`))
+    .on('error', e => console.error(`AI endpoint not started on port ${pport}: ${e.message}`));
+}

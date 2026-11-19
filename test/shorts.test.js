@@ -289,7 +289,7 @@ test('hook backtest: calibration rates opening lines from local transcripts', { 
 });
 
 test('MCP exposes Shorts, best times and the all-channels board', async () => {
-  const src = fs.readFileSync(path.join(ROOT, 'mcp', 'server.js'), 'utf8');
+  const src = fs.readFileSync(path.join(ROOT, 'mcp', 'tools.js'), 'utf8');
   for (const t of ['make_shorts', 'portfolio', 'best_publish_time']) assert.ok(src.includes(`'${t}'`) || src.includes(`"${t}"`) || src.includes(`name: '${t}'`), t);
   const guide = await (await fetch(base + '/api/agent')).text();
   assert.ok(/SHORTS, SLOTS, ALL CHANNELS/.test(guide));

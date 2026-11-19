@@ -4,3 +4,4 @@ test/screenshots/
 .env
 *.log
 .DS_Store
+dist/

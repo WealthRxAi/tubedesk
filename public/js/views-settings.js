@@ -2,6 +2,54 @@
 (() => {
   const { view, api, h, raw, esc, fmt, fmtFull, stat, barChart, err, toast, busy, state, date } = TD;
 
+  // ---- Use TubeDesk from any AI: remote access (Tailscale Funnel), connector URLs, approvals, connected apps, API keys ----
+  async function renderAnyAi(el) {
+    if (!el) return;
+    let d;
+    try { d = await api('/remote/status'); } catch (e) { el.innerHTML = h`<h2>Use TubeDesk from any AI</h2><div class="note bad">${e.message}</div>`; return; }
+    const t = d.tunnel, on = t.state === 'on';
+    const copy = v => h`<code class="copy" data-copy="${v}" title="Click to copy">${v}</code>`;
+    el.innerHTML = h`<h2>Use TubeDesk from any AI <span class="badge ${on ? 'ok' : 'warn'}">${on ? 'reachable' : 'Mac only'}</span></h2>
+      <p class="mini">ChatGPT, Claude on the web and phone, Gemini, Grok, n8n — any AI can use and set up TubeDesk, the way they use vidIQ. They reach it through a private, permanent HTTPS address from Tailscale (free). Each new app must be approved by you: TubeDesk texts you an 8-digit code (or press Approve below). Only the AI tools are reachable through that address — never this page, your settings or your files list.</p>
+      ${d.pending?.length ? h`<div class="note" style="margin:8px 0"><b>Waiting for your approval</b>${d.pending.map(p => h`<div class="row" style="margin-top:6px"><span><b>${p.name}</b> from <code>${p.host}</code> · expires in ${Math.ceil(p.expiresIn / 60)} min</span><button class="sm primary" data-approve="${p.id}">Approve</button><button class="sm ghost" data-deny="${p.id}">Deny</button></div>`).join('')}</div>` : ''}
+      <div class="grid g2" style="margin-top:8px"><div>
+        <h3>1 · Address</h3>
+        ${on ? h`<div class="kv"><b>MCP connector</b><span>${copy(d.mcpUrl)}</span><b>OpenAPI (all tools)</b><span>${copy(d.openapiUrl)}</span><b>OpenAPI for GPTs (30)</b><span>${copy(d.openapiGptUrl)}</span></div><div class="row" style="margin-top:8px"><button class="sm ghost" id="ai-off">Turn off remote access</button></div>`
+          : t.state === 'not-installed' ? h`<div class="mini">Install Tailscale once (free): <code>brew install --cask tailscale</code>, open the app and sign in. Then press the button.</div><div class="row" style="margin-top:8px"><button class="sm primary" id="ai-on">Turn on remote access</button></div>`
+          : t.state === 'signed-out' ? h`<div class="mini">Open the Tailscale app and sign in (free), then press the button.</div><div class="row" style="margin-top:8px"><button class="sm primary" id="ai-on">Turn on remote access</button></div>`
+          : h`<div class="mini">Tailscale is ready${t.publicUrl ? h` (<code>${t.publicUrl}</code>)` : ''}.</div><div class="row" style="margin-top:8px"><button class="sm primary" id="ai-on">Turn on remote access</button></div>`}
+        <div id="ai-msg"></div>
+        <h3 style="margin-top:14px">2 · Connect an app</h3>
+        <div class="mini"><b>Claude (web, phone, desktop):</b> Settings → Connectors → Add custom connector → paste the MCP connector URL → Connect → enter the code from your phone.</div>
+        <div class="mini"><b>ChatGPT:</b> Settings → Apps &amp; Connectors → Advanced → turn on Developer mode → Create → paste the MCP connector URL, authentication OAuth → enter the code. For a custom GPT instead: Configure → Actions → Import from URL (OpenAPI for GPTs), Authentication = API key, Bearer.</div>
+        <div class="mini"><b>Gemini CLI / Grok / n8n / scripts:</b> MCP URL or OpenAPI URL with header <code>Authorization: Bearer &lt;API key&gt;</code>.</div>
+        <div class="mini"><b>On this Mac</b> (Claude desktop/Code, Cursor, Codex): use the plugin below or <code>${d.localMcp}</code> — no address needed.</div>
+      </div><div>
+        <h3>Connected apps</h3>
+        ${d.clients?.length ? h`<table><tbody>${d.clients.map(c => h`<tr><td><b>${c.name}</b><div class="mini">${c.redirectHost} · last used ${c.last_used_at ? date(c.last_used_at) : 'never'}</div></td><td><button class="sm ghost" data-revoke="${c.client_id}">Disconnect</button></td></tr>`).join('')}</tbody></table>` : h`<div class="mini">None yet.</div>`}
+        <h3 style="margin-top:14px">API keys</h3>
+        ${d.apiKeys?.length ? h`<table><tbody>${d.apiKeys.map(k => h`<tr><td><b>${k.name}</b> <code>${k.prefix}…</code><div class="mini">created ${date(k.created_at)} · last used ${k.last_used_at ? date(k.last_used_at) : 'never'}</div></td><td><button class="sm ghost" data-delkey="${k.id}">Revoke</button></td></tr>`).join('')}</tbody></table>` : h`<div class="mini">None yet.</div>`}
+        <div class="row" style="margin-top:8px"><input id="key-name" placeholder="Name, e.g. My GPT" style="flex:1"><button class="sm" id="key-new">Create API key</button></div><div id="key-out"></div>
+      </div></div>`;
+    const msg = (html, cls = '') => { el.querySelector('#ai-msg').innerHTML = h`<div class="note ${cls}" style="margin-top:8px">${html}</div>`; };
+    el.querySelectorAll('[data-copy]').forEach(c => c.onclick = () => { navigator.clipboard?.writeText(c.dataset.copy); toast('Copied', 'ok'); });
+    const on_ = el.querySelector('#ai-on');
+    if (on_) on_.onclick = async () => { busy(on_, true); try { const r = await api('/remote/enable', { method: 'POST' }); if (r.state === 'needs-approval') { msg(h`Tailscale needs you to allow Funnel once: <a href="${r.approveUrl}" target="_blank" rel="noopener">open this link</a>, then press the button again.`); busy(on_, false); } else renderAnyAi(el); } catch (x) { msg(x.message, 'bad'); busy(on_, false); } };
+    const off = el.querySelector('#ai-off');
+    if (off) off.onclick = async () => { busy(off, true); try { await api('/remote/disable', { method: 'POST' }); } catch (x) { err(x); } renderAnyAi(el); };
+    el.querySelectorAll('[data-approve]').forEach(b => b.onclick = async () => { await api(`/remote/requests/${b.dataset.approve}/approve`, { method: 'POST' }); toast('Approved — the app finishes connecting by itself', 'ok'); renderAnyAi(el); });
+    el.querySelectorAll('[data-deny]').forEach(b => b.onclick = async () => { await api(`/remote/requests/${b.dataset.deny}/deny`, { method: 'POST' }); renderAnyAi(el); });
+    el.querySelectorAll('[data-revoke]').forEach(b => b.onclick = async () => { await api(`/remote/clients/${encodeURIComponent(b.dataset.revoke)}/revoke`, { method: 'POST' }); toast('Disconnected', 'ok'); renderAnyAi(el); });
+    el.querySelectorAll('[data-delkey]').forEach(b => b.onclick = async () => { await api(`/remote/keys/${b.dataset.delkey}`, { method: 'DELETE' }); renderAnyAi(el); });
+    el.querySelector('#key-new').onclick = async () => {
+      const k = await api('/remote/keys', { method: 'POST', body: { name: el.querySelector('#key-name').value.trim() || 'API key' } });
+      el.querySelector('#key-out').innerHTML = h`<div class="note" style="margin-top:8px">Copy it now — it is shown only once:<br>${copy(k.key)}</div>`;
+      el.querySelectorAll('#key-out [data-copy]').forEach(c => c.onclick = () => { navigator.clipboard?.writeText(c.dataset.copy); toast('Copied', 'ok'); });
+    };
+    if (d.pending?.length) setTimeout(() => document.body.contains(el) && renderAnyAi(el), 5000);
+    else if (!el.dataset.polling) { el.dataset.polling = '1'; const tick = () => { if (!document.body.contains(el)) return; api('/remote/pending').then(x => { if (x.length) renderAnyAi(el); else setTimeout(tick, 5000); }).catch(() => setTimeout(tick, 10000)); }; setTimeout(tick, 5000); }
+  }
+
   view('/settings', async (main, r) => {
     const [s, q, st, ps, rs] = await Promise.all([api('/settings'), api('/quota'), api('/status'), api('/publish/status'), api('/render/status')]);
     const setup = r.query.setup === '1' || !st.configured.apiKey;
@@ -73,6 +121,11 @@
         <div class="row"><button id="ttauth" class="sm">Connect TikTok</button><input id="ttcode" placeholder="paste the code (or the full redirect URL)" style="flex:1"><button id="ttconnect" class="primary sm">Finish</button></div>
         <div class="mini" id="ttout" style="margin-top:8px">${ps.tiktok?.connected ? h`<span class="up">✓ connected as @${ps.tiktok.username || '?'}</span>` : ps.tiktok?.configured ? 'app configured — not connected yet' : ''}</div>
         <label class="row mini" style="margin-top:8px"><input type="checkbox" id="tt_audited" ${s.tt_audited === '1' ? 'checked' : ''}> My app passed TikTok's audit (posts can be public). Until then TikTok forces new posts to "Only me".</label></div>
+      <div class="card" id="any-ai" style="grid-column:1/-1"><h2>Use TubeDesk from any AI</h2><div class="loading"><span class="spinner"></span></div></div>
+      <div class="card"><h2>TubeDesk inside Claude</h2><p class="mini">The TubeDesk plugin puts everything here into Claude: ask "what should my next video be?", "score these titles", "how did my last upload do?" or "post this at the best time" and Claude answers from your own data and acts through TubeDesk. It adds the TubeDesk tools plus five workflows — video ideas, packaging, channel checkup, publishing and Shorts.</p>
+        <div class="step"><div class="n">1</div><div><b>Claude desktop app:</b> <a class="btn sm primary" href="/api/plugin/download" download>Download the plugin</a> then drag <code>tubedesk.plugin</code> into a Claude chat and press Install.</div></div>
+        <div class="step"><div class="n">2</div><div><b>Claude Code:</b> <code>/plugin marketplace add WealthRxAi/tubedesk</code> then <code>/plugin install tubedesk@tubedesk</code></div></div>
+        <div class="mini">TubeDesk must be running on this Mac for the tools to answer. Nothing leaves your machine except the calls TubeDesk already makes to YouTube, Instagram and TikTok.</div></div>
       <div class="card"><h2>Publishing for AI agents</h2><p class="mini">Any model that can run a command or call HTTP on this machine can publish through TubeDesk — no browser automation, no copy-paste.</p>
         <div class="mini"><b>YouTube:</b> ${ps.youtube.ready ? h`<span class="up">✓ ready</span> — ${ps.youtube.channels.filter(c => c.authorized).map(c => c.title).join(', ')} · ${ps.youtube.uploadsLeftToday} uploads left today (1,600 units each)` : h`<span class="down">✕ no authorized channel</span> — Channels → Connect with Google`}</div>
         <div class="mini"><b>Instagram:</b> ${ps.instagram.configured ? h`<span class="up">✓ ready</span>` : h`<span class="down">✕ not configured</span>`}</div>
@@ -92,6 +145,7 @@
     main.querySelector('#ttconnect').onclick = async e => { busy(e.target, true); try { const r = await api('/social/tiktok/connect', { method: 'POST', body: { code: main.querySelector('#ttcode').value.trim() } }); main.querySelector('#ttout').innerHTML = h`<span class="up">✓ connected as @${r.username} · ${r.followers ?? '?'} followers · ${r.videos ?? '?'} videos</span>`; } catch (x) { main.querySelector('#ttout').innerHTML = h`<span class="down">✕ ${x.message}</span>`; } busy(e.target, false); };
     main.querySelector('#tt_audited').onchange = async e => { await api('/settings', { method: 'PUT', body: { tt_audited: e.target.checked ? '1' : '0' } }); };
     main.querySelector('#snap').onclick = async e => { busy(e.target, true); try { const r2 = await api('/snapshot/run', { method: 'POST' }); toast(`Snapshot: ${r2.channels} channels, ${r2.videos} videos, ${r2.alerts} alerts`, 'ok'); await TD.refreshChannels(); TD.route(); } catch (x) { err(x); } busy(e.target, false); };
+    renderAnyAi(main.querySelector('#any-ai'));
     api('/shorts/status').then(t => { const e = t.engine, el = main.querySelector('#whisper-line'); if (el) el.innerHTML = h`<b>Local transcription (Shorts, hook scoring):</b> ${e.whisper ? h`<span class="up">✓ whisper.cpp</span> at <code>${e.whisper}</code> · model ${e.modelName} ${e.modelReady ? '(downloaded)' : '(downloads on first use)'}` : h`<span class="down">✕ not installed</span> — <code>brew install whisper-cpp</code> (free, runs on your Mac)`}`; }).catch(() => {});
     main.querySelector('#cache').onclick = async () => { const r2 = await api('/cache/clear', { method: 'POST', body: {} }); toast(`Cleared ${r2.cleared} cached responses`); };
     main.querySelector('#restart').onclick = async () => {

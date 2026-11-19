@@ -79,6 +79,7 @@ function resolvePath(file) {
 
 // ---------- speech segments (pause detection) & caption timing ----------
 export async function speechSegments(file, { noiseDb = -35, minPause = 0.22 } = {}) {
+  noiseDb = num(noiseDb, -35); minPause = num(minPause, 0.22);
   const abs = resolvePath(file);
   const ffmpeg = findBin('ffmpeg'); if (!ffmpeg) throw new Error(toolStatus().hint);
   const { err } = await run(ffmpeg, ['-i', abs, '-af', `silencedetect=noise=${noiseDb}dB:d=${minPause}`, '-f', 'null', '-']);
@@ -123,8 +124,32 @@ export function parseSrtGroups(srt) {
 
 // ---------- timeline → ffmpeg ----------
 const esc = s => String(s).replace(/\\/g, '\\\\').replace(/'/g, '\u2019').replace(/:/g, '\\:').replace(/%/g, '\\%').replace(/,/g, '\\,').replace(/\[/g, '\\[').replace(/\]/g, '\\]');
-const color = c => { if (!c) return 'white'; c = String(c).trim(); return c.startsWith('#') ? '0x' + c.slice(1) : c; };
-const num = (v, d) => (v === undefined || v === null || v === '' ? d : Number(v));
+// Every value that ends up inside the ffmpeg filtergraph is validated here: a filtergraph can chain arbitrary filters
+// (including ones that read or write files), so colours, numbers and position expressions must not carry ; , : [ ] ' \\.
+const color = c => {
+  if (c === undefined || c === null || c === '') return 'white';
+  const v = String(c).trim();
+  if (/^#[0-9a-f]{6}([0-9a-f]{2})?$/i.test(v)) return '0x' + v.slice(1);
+  if (/^0x[0-9a-f]{6}([0-9a-f]{2})?$/i.test(v) || /^[a-z]{3,24}$/i.test(v)) return v;
+  throw new Error(`invalid colour ${JSON.stringify(String(c).slice(0, 40))} — use #RRGGBB, #RRGGBBAA or a colour name`);
+};
+const num = (v, d) => {
+  if (v === undefined || v === null || v === '') return d;
+  const n = Number(v);
+  if (!Number.isFinite(n)) throw new Error(`invalid number ${JSON.stringify(String(v).slice(0, 40))} in the timeline`);
+  return n;
+};
+// Position expressions for text (e.g. "(w-text_w)/2", "h*0.7"): numbers, variables and arithmetic only.
+const posExpr = (v, d) => {
+  if (v === undefined || v === null || v === '') return d;
+  if (typeof v === 'number') return String(num(v, 0));
+  const x = String(v).trim();
+  if (!/^[0-9a-z_+\-*/(). ]{1,80}$/i.test(x)) throw new Error(`invalid position ${JSON.stringify(x.slice(0, 40))} — use a number or an expression like (w-text_w)/2`);
+  return x;
+};
+const cropOf = c => { if (!Array.isArray(c) || c.length !== 4) throw new Error('crop must be [x, y, w, h]'); const [x, y, w, h] = c.map(v => num(v, 0)); return `crop=${w}:${h}:${x}:${y},`; };
+const focusOf = f => { const [fx, fy] = Array.isArray(f) ? f : [0.5, 0.35]; return [num(fx, 0.5), num(fy, 0.35)]; };
+const TONES = ['thump', 'click', 'riser'];
 
 export const TIMELINE_SCHEMA = {
   output: 'absolute path for the MP4 (default: data/renders/<id>.mp4)', width: 1080, height: 1920, fps: 30, background: '#0f1115',
@@ -142,13 +167,13 @@ export const TIMELINE_SCHEMA = {
 
 function fitExpr(track, W, H) {
   // Returns a filter chain string that produces a w×h canvas-sized stream from [in]. Focus point stays in frame when cropping.
-  const w = num(track.w, W), h = num(track.h, H), [fx, fy] = track.focus || [0.5, 0.35];
+  const w = num(track.w, W), h = num(track.h, H), [fx, fy] = focusOf(track.focus);
   if (track.fit === 'contain') return `scale=${w}:${h}:force_original_aspect_ratio=decrease:flags=lanczos,pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2:color=${color(track.pad || '#000000')}`;
   return `scale=${w}:${h}:force_original_aspect_ratio=increase:flags=lanczos,crop=${w}:${h}:(iw-${w})*${fx}:(ih-${h})*${fy}`;
 }
 function zoomExpr(track, w, h, frames, fps) {
   if (!track.zoom) return '';
-  const z0 = num(track.zoom.from, 1), z1 = num(track.zoom.to, z0), [fx, fy] = track.focus || [0.5, 0.35];
+  const z0 = num(track.zoom.from, 1), z1 = num(track.zoom.to, z0), [fx, fy] = focusOf(track.focus);
   return `,zoompan=z='${z0}+(${z1}-${z0})*on/${Math.max(1, frames)}':x='iw*${fx}-(iw/zoom)*${fx}':y='iw*0+ih*${fy}-(ih/zoom)*${fy}':d=1:s=${w}x${h}:fps=${fps}`;
 }
 
@@ -174,7 +199,7 @@ export function compile(spec, { id }) {
         inputs.push('-ss', String(inp), '-t', String(dur + num(t.freeze, 0) + 0.5), '-i', src); const idx = n++;
         const frames = Math.round(dur * FPS);
         const hold = num(t.freeze, 0) ? `,tpad=stop_mode=clone:stop_duration=${num(t.freeze, 0)}` : '';
-        const pre = t.crop ? `crop=${t.crop[2]}:${t.crop[3]}:${t.crop[0]}:${t.crop[1]},` : '';
+        const pre = t.crop ? cropOf(t.crop) : '';
         f.push(`[${idx}:v]fps=${FPS},${pre}${fitExpr(t, W, H)}${zoomExpr(t, w, h, frames, FPS)}${hold},setpts=PTS-STARTPTS+${start.toFixed(3)}/TB,format=rgba[v${ti}]`);
         const holdEnd = end + num(t.freeze, 0);
         f.push(`[${cur}][v${ti}]overlay=${num(t.x, 0)}:${num(t.y, 0)}:enable='between(t,${start.toFixed(3)},${holdEnd.toFixed(3)})'[c${ti}]`); cur = `c${ti}`;
@@ -184,7 +209,7 @@ export function compile(spec, { id }) {
       case 'image': {
         const src = resolvePath(t.src); const dur = end - start; const w = num(t.w, W), h = num(t.h, H);
         inputs.push('-loop', '1', '-framerate', String(FPS), '-t', String(dur + 0.2), '-i', src); const idx = n++;
-        const pre = t.crop ? `crop=${t.crop[2]}:${t.crop[3]}:${t.crop[0]}:${t.crop[1]},` : '';
+        const pre = t.crop ? cropOf(t.crop) : '';
         f.push(`[${idx}:v]${pre}${fitExpr(t, W, H)}${zoomExpr(t, w, h, Math.round(dur * FPS), FPS)},setpts=PTS+${start.toFixed(3)}/TB,format=rgba[v${ti}]`);
         f.push(`[${cur}][v${ti}]overlay=${num(t.x, 0)}:${num(t.y, 0)}:${en}[c${ti}]`); cur = `c${ti}`;
         break;
@@ -194,8 +219,8 @@ export function compile(spec, { id }) {
         break;
       }
       case 'text': {
-        const font = F[t.font || 'bold'] || F.regular; if (!font) throw new Error('no usable font found; set font_bold/font_regular in Settings to a .ttf/.otf path');
-        const size = num(t.size, 80), x = t.x === undefined || t.x === 'center' ? '(w-text_w)/2' : String(t.x), y = t.y === undefined ? '(h-text_h)/2' : String(t.y);
+        const font = (Object.hasOwn(F, t.font || 'bold') ? F[t.font || 'bold'] : null) || F.regular; if (!font) throw new Error('no usable font found; set font_bold/font_regular in Settings to a .ttf/.otf path');
+        const size = num(t.size, 80), x = t.x === undefined || t.x === 'center' ? '(w-text_w)/2' : posExpr(t.x, '(w-text_w)/2'), y = posExpr(t.y, '(h-text_h)/2');
         const box = t.box ? `:box=1:boxcolor=${color(t.boxColor || '#000000')}@${num(t.boxOpacity, 0.6)}:boxborderw=${num(t.boxPad, 14)}` : '';
         const alpha = num(t.fadeIn, 0) ? `:alpha='min(1,(t-${start.toFixed(3)})/${num(t.fadeIn, 0.1)})'` : '';
         f.push(`[${cur}]drawtext=fontfile=${font}:text='${esc(t.text || '')}':fontcolor=${color(t.color || '#ffffff')}:fontsize=${size}:borderw=${num(t.stroke, Math.max(3, Math.round(size / 14)))}:bordercolor=${color(t.strokeColor || '#000000')}${box}${alpha}:x=${x}:y=${y}:${en}[c${ti}]`); cur = `c${ti}`;
@@ -206,9 +231,10 @@ export function compile(spec, { id }) {
         if (!groups && t.srt) groups = parseSrtGroups(fs.readFileSync(resolvePath(t.srt), 'utf8'));
         if (!groups && t.script) { if (!t._timed) throw new Error('captions.script needs timing: the renderer resolves it before compile'); groups = t._timed; }
         if (!Array.isArray(groups)) throw new Error('captions needs groups[], srt, or script[] + audioFrom.');
-        const font = F[t.font || 'regular'] || F.bold; const size = num(t.size, 58);
-        const yFor = tm => { for (const o of t.yWhen || []) if (tm >= o.from && tm < o.to) return o.y; return num(t.y, Math.round(H * 0.61)); };
+        const font = (Object.hasOwn(F, t.font || 'regular') ? F[t.font || 'regular'] : null) || F.bold; const size = num(t.size, 58);
+        const yFor = tm => { for (const o of Array.isArray(t.yWhen) ? t.yWhen : []) if (tm >= num(o.from, 0) && tm < num(o.to, 0)) return num(o.y, Math.round(H * 0.61)); return num(t.y, Math.round(H * 0.61)); };
         groups.slice(num(t.skipFirst, 0)).forEach((g, gi) => {
+          g = { text: String(g?.text ?? ''), start: num(g?.start, 0), end: num(g?.end, 0) };
           const y = yFor((g.start + g.end) / 2);
           f.push(`[${cur}]drawtext=fontfile=${font}:text='${esc(g.text)}':fontcolor=${color(t.color || '#ffffff')}:fontsize=${size}:borderw=${num(t.stroke, 5)}:bordercolor=${color(t.strokeColor || '#000000')}@0.9:x=(w-text_w)/2:y=${y}:enable='between(t,${g.start.toFixed(3)},${g.end.toFixed(3)})'[c${ti}_${gi}]`); cur = `c${ti}_${gi}`;
         });
@@ -224,6 +250,7 @@ export function compile(spec, { id }) {
       }
       case 'tone': {
         const k = t.kind || 'thump', vol = num(t.volume, 0.8);
+        if (!TONES.includes(k)) throw new Error(`tone kind must be one of ${TONES.join(', ')}`);
         const expr = k === 'click' ? `${vol}*sin(2*PI*1100*t)*exp(-45*t)` : k === 'riser' ? `${vol * 0.5}*sin(2*PI*(200+900*t)*t)*min(1,t*2)` : `${vol}*sin(2*PI*(90-60*min(t,0.3)/0.3)*t)*exp(-9*t)+${vol * 0.5}*sin(2*PI*1100*t)*exp(-45*t)`;
         const d = k === 'riser' ? num(t.duration, 1.5) : 0.5;
         aud.push(`aevalsrc='${expr}':s=48000:d=${d},adelay=${Math.round(start * 1000)}|${Math.round(start * 1000)},apad=whole_dur=${TOTAL.toFixed(3)}[a${ti}]`); voice.push(`a${ti}`);
@@ -323,6 +350,8 @@ export function transcode({ file, preset = 'short', output, width, height, fit =
   const ffmpeg = findBin('ffmpeg'); if (!ffmpeg) throw new Error(toolStatus().hint);
   const src = resolvePath(file); const P = PRESETS[preset]; if (!P) throw new Error(`unknown preset ${preset}; one of ${Object.keys(PRESETS).join(', ')}`);
   const w = num(width, P.w || 1080), h = num(height, P.h || 1920);
+  focus = focusOf(focus); fps = num(fps, 30); crf = num(crf, 18); loudness = loudness === null ? null : num(loudness, -14);
+  if (trim) trim = { start: num(trim.start, 0), duration: trim.duration === undefined || trim.duration === null ? undefined : num(trim.duration, 0) };
   const id = crypto.randomBytes(6).toString('hex');
   const out = output ? path.resolve(output) : path.join(RENDER_DIR, `${path.basename(src, path.extname(src))}-${preset}.mp4`);
   const vf = (fit === 'contain' || preset === 'contain') ? `scale=${w}:${h}:force_original_aspect_ratio=decrease,pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2` : `scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h}:(iw-${w})*${focus[0]}:(ih-${h})*${focus[1]}`;
@@ -342,6 +371,7 @@ export function transcode({ file, preset = 'short', output, width, height, fit =
 }
 
 export async function frame({ file, at = 1, output, width }) {
+  at = num(at, 1); width = width === undefined || width === null || width === '' ? null : Math.round(num(width, 0));
   const ffmpeg = findBin('ffmpeg'); if (!ffmpeg) throw new Error(toolStatus().hint);
   const src = resolvePath(file); const out = output ? path.resolve(output) : path.join(RENDER_DIR, `${path.basename(src, path.extname(src))}-${String(at).replace('.', '_')}s.jpg`);
   await run(ffmpeg, ['-y', '-loglevel', 'error', '-ss', String(at), '-i', src, '-frames:v', '1', ...(width ? ['-vf', `scale=${width}:-1`] : []), '-q:v', '2', out]);

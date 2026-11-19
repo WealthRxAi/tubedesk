@@ -1,0 +1,12 @@
+{
+  "name": "tubedesk",
+  "owner": { "name": "WealthRx AI" },
+  "metadata": { "description": "TubeDesk — the free, self-hosted YouTube growth desk — as a Claude plugin." },
+  "plugins": [
+    {
+      "name": "tubedesk",
+      "source": "./plugin",
+      "description": "YouTube research, packaging, radar scoring, Shorts and publishing through your own TubeDesk."
+    }
+  ]
+}
