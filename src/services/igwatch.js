@@ -2,8 +2,9 @@
 // comments, shares, saves) through the Instagram Graph API you already connected for publishing, and keeps a
 // local copy so earlier reels form the baseline for new ones. `views` is Instagram's current Reels metric
 // (plays was retired in April 2025).
-import { db, getSetting } from '../db.js';
+import { db } from '../db.js';
 import { ig, instagramStatus } from './publish.js';
+import * as accounts from './accounts.js';
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS ig_media (
@@ -22,7 +23,8 @@ CREATE TABLE IF NOT EXISTS ig_media (
 `);
 
 export const configured = () => instagramStatus().configured;
-export const igChannelId = () => 'ig:' + (getSetting('ig_user_id') || 'unknown');
+/** Radar "channel" id for an Instagram account (the current one by default). */
+export const igChannelId = (accountId = null) => 'ig:' + (accountId || accounts.current('instagram')?.account_id || 'unknown');
 // Instagram returns "+0000"; normalise to an ISO offset every runtime parses.
 const iso = t => t ? new Date(String(t).replace(/([+-]\d{2})(\d{2})$/, '$1:$2')).toISOString() : null;
 
@@ -37,9 +39,10 @@ async function insights(id) {
  * Refresh the latest `limit` media; insights are fetched for Reels younger than `insightsDays` (all when null).
  * Returns the reels that were refreshed.
  */
-export async function syncMedia({ limit = 25, insightsDays = null } = {}) {
-  if (!configured()) return [];
-  const user = getSetting('ig_user_id');
+export async function syncMedia({ limit = 25, insightsDays = null, all = false } = {}) {
+  if (all) return (await accounts.eachAccount('instagram', () => syncMedia({ limit, insightsDays }).catch(() => []))).flat();
+  const user = accounts.current('instagram')?.account_id;
+  if (!user || !accounts.current('instagram')?.token) return [];
   const list = await ig(`${user}/media`, { params: { fields: 'id,caption,media_type,media_product_type,timestamp,permalink,thumbnail_url,media_url,like_count,comments_count', limit } });
   const up = db.prepare(`INSERT INTO ig_media (id, ig_user_id, caption, media_type, product_type, published_at, permalink, thumbnail, likes, comments) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET caption = excluded.caption, thumbnail = excluded.thumbnail, likes = excluded.likes, comments = excluded.comments, permalink = excluded.permalink, updated_at = datetime('now')`);
@@ -60,8 +63,10 @@ export async function syncMedia({ limit = 25, insightsDays = null } = {}) {
 }
 
 export function get(id) { return db.prepare('SELECT * FROM ig_media WHERE id = ?').get(id); }
-/** Earlier reels as baseline peers: [{ageH, views}]. */
-export function peers(excludeId = null) {
-  return db.prepare("SELECT published_at, views FROM ig_media WHERE id != ? AND views IS NOT NULL AND (product_type = 'REELS' OR media_type = 'VIDEO')").all(String(excludeId || '').replace(/^ig:/, ''))
+/** Earlier reels of the same account as baseline peers: [{ageH, views}]. */
+export function peers(excludeId = null, accountId = null) {
+  const ex = String(excludeId || '').replace(/^ig:/, '');
+  const acct = accountId || db.prepare('SELECT ig_user_id FROM ig_media WHERE id = ?').get(ex)?.ig_user_id || accounts.current('instagram')?.account_id || null;
+  return db.prepare("SELECT published_at, views FROM ig_media WHERE id != ? AND (? IS NULL OR ig_user_id = ?) AND views IS NOT NULL AND (product_type = 'REELS' OR media_type = 'VIDEO')").all(ex, acct, acct)
     .map(r => ({ ageH: (Date.now() - Date.parse(r.published_at)) / 3600000, views: r.views }));
 }

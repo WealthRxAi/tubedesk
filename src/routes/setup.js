@@ -18,6 +18,9 @@ import * as transcribe from '../services/transcribe.js';
 import * as ren from '../services/render.js';
 import * as cfg from '../services/settings-schema.js';
 import * as remote from '../services/remote.js';
+import * as accounts from '../services/accounts.js';
+import * as aiClients from '../services/ai-clients.js';
+import { setSetting } from '../db.js';
 import { TOOLS, createToolRunner } from '../../mcp/tools.js';
 import { openapi } from '../services/openapi.js';
 
@@ -36,7 +39,10 @@ export function remoteGuard(req, res, next) {
   if (p === '/settings' && req.method !== 'GET') return res.status(403).json({ error: 'Remote apps change settings with update_settings (PUT /api/config).' });
   if (p.startsWith('/remote/') && !(req.method === 'GET' && p === '/remote/status')) return res.status(403).json({ error: 'Remote access can only be managed on the Mac running TubeDesk.' });
   // Where alerts go (and the alert log, which once carried approval codes) decides who can approve new apps: Mac only.
-  if (p === '/plugin/download' || p.startsWith('/admin') || p.startsWith('/system') || p === '/notify/log') return res.status(403).json({ error: 'Only available on the Mac.' });
+  // Which Instagram/TikTok account each brand posts to: remote apps may add accounts (and link a brand's first one),
+  // but removing, disconnecting or changing the default happens on the Mac.
+  if ((p.startsWith('/social-accounts/') && (req.method === 'DELETE' || p.endsWith('/default'))) || p === '/social/tiktok/disconnect') return res.status(403).json({ error: 'Removing accounts or changing the default account can only be done on the Mac running TubeDesk (Settings → Social accounts).' });
+  if (p === '/plugin/download' || p.startsWith('/admin') || p.startsWith('/system') || p === '/notify/log' || (p.startsWith('/ai-clients') && req.method !== 'GET')) return res.status(403).json({ error: 'Only available on the Mac.' });
   // Files a remote app asks TubeDesk to write must be media in the user's media folders or TubeDesk's data folder.
   const out = req.body && typeof req.body === 'object' ? req.body.output : undefined;
   if (out !== undefined && out !== null && out !== '') {
@@ -62,10 +68,14 @@ setup.get('/setup', w(async (req, res) => {
   for (const c of owned) add(`connected_${c.id}`, `${c.title}: connected with Google`, c.authorized, c.authorized ? (c.oauth_email || 'connected') : 'not connected — no analytics, CTR or uploads', 'connect_account {service:"google"} and open the link on the Mac, signing in with the Google account that owns this channel.');
   const competitors = owned.reduce((n, c) => n + comp.listCompetitors(c.id).length, 0);
   add('competitors', 'Competitors tracked', competitors > 0, `${competitors}`, 'similar_channels {channelId} to find them, then add_channel {input, kind:"competitor"}.');
-  const ig = pub.instagramStatus();
-  add('instagram', 'Instagram (publishing + reels radar)', ig.configured, ig.configured ? `@${getSetting('ig_username', '') || getSetting('ig_user_id')}` : 'not connected', 'connect_account {service:"instagram"} for the steps.');
+  const igs = accounts.list('instagram'), tts = accounts.list('tiktok');
+  add('instagram', 'Instagram accounts (publishing + reels radar)', igs.length > 0, igs.map(a => '@' + (a.username || a.accountId) + (a.channelTitle ? ` → ${a.channelTitle}` : '')).join(', ') || 'none', 'connect_account {service:"instagram", channel:"<brand>"} for the steps; one account per brand.');
   const tt = social.tiktokStatus();
-  add('tiktok', 'TikTok (stats + publishing)', tt.connected, tt.connected ? `@${tt.username || tt.openId}` : (tt.configured ? 'app set, account not connected' : 'not set up'), 'connect_account {service:"tiktok"} for the steps.');
+  add('tiktok', 'TikTok accounts (stats + publishing)', tts.length > 0, tts.map(a => '@' + (a.username || a.accountId) + (a.channelTitle ? ` → ${a.channelTitle}` : '')).join(', ') || (tt.configured ? 'app set, no account connected' : 'not set up'), 'connect_account {service:"tiktok", channel:"<brand>"} — one sign-in per brand account.');
+  if (owned.length > 1) for (const c of owned) {
+    const hasIg = igs.some(a => a.channelId === c.id), hasTt = tts.some(a => a.channelId === c.id);
+    if ((igs.length && !hasIg) || (tts.length && !hasTt)) add(`brand_${c.id}`, `${c.title}: own Instagram/TikTok linked`, false, `${hasIg ? 'Instagram ✓' : 'no Instagram'} · ${hasTt ? 'TikTok ✓' : 'no TikTok'}`, `Connect this brand's accounts (connect_account with channel "${c.title}") or link existing ones (link_social_account).`);
+  }
   const v = voice.status();
   add('voiceover', 'Voiceover (HeyGen / ElevenLabs)', v.configured, v.configured ? v.provider : 'no key', 'update_settings {heygen_api_key, heygen_voice_id} (or elevenlabs_api_key).');
   const n = notifier.channelsConfigured();
@@ -83,8 +93,24 @@ setup.get('/setup', w(async (req, res) => {
   res.json({ ready: !items.some(i => i.required && !i.ok), done: items.length - missing.length, total: items.length, next, items });
 }));
 
+/** Every brand: owned YouTube channel + its linked Instagram/TikTok accounts. */
+setup.get('/brands', (req, res) => {
+  const igs = accounts.list('instagram'), tts = accounts.list('tiktok');
+  const brands = ch.listChannels('owned').map(c => {
+    const ig = igs.find(a => a.channelId === c.id), tt = tts.find(a => a.channelId === c.id);
+    return { channelId: c.id, title: c.title, handle: c.handle || null, connected: !!c.authorized, subscribers: c.subscriber_count ?? null,
+      instagram: ig ? ig.username || ig.accountId : null, tiktok: tt ? tt.username || tt.accountId : null };
+  });
+  const unlinked = { instagram: igs.filter(a => !a.channelId).map(a => a.username || a.accountId), tiktok: tts.filter(a => !a.channelId).map(a => a.username || a.accountId) };
+  // With a single brand, unlinked accounts are simply that brand's.
+  if (brands.length === 1) { brands[0].instagram ||= unlinked.instagram[0] || null; brands[0].tiktok ||= unlinked.tiktok[0] || null; unlinked.instagram = []; unlinked.tiktok = []; }
+  res.json({ brands, unlinked, defaults: { instagram: igs.find(a => a.isDefault)?.username || null, tiktok: tts.find(a => a.isDefault)?.username || null } });
+});
+
 setup.get('/setup/connect/:service', w(async (req, res) => {
   const s = req.params.service;
+  const brand = req.query.channel ? ch.listChannels('owned').find(c => [c.id, String(c.title).toLowerCase(), String(c.handle || '').toLowerCase().replace(/^@/, '')].includes(String(req.query.channel).toLowerCase().replace(/^@/, ''))) : null;
+  if (req.query.channel && !brand) return res.status(400).json({ error: `"${req.query.channel}" is not one of your channels` });
   if (s === 'google') {
     if (!getSetting('google_client_id')) return res.status(400).json({ error: 'Set google_client_id and google_client_secret first (setup_status explains how).' });
     return res.json({ service: s, url: authUrl(), openOn: 'the Mac running TubeDesk (the sign-in returns to http://localhost:4949)', next: 'Sign in with the Google account that owns the channel and allow access. TubeDesk links every channel on that account. Then call setup_status.' });
@@ -92,14 +118,14 @@ setup.get('/setup/connect/:service', w(async (req, res) => {
   if (s === 'tiktok') {
     const st = social.tiktokStatus();
     if (!st.configured) return res.json({ service: s, steps: ['Create a free app at developers.tiktok.com (Login Kit + Content Posting API), redirect URI = a page you control (TubeDesk ships one in docs/).', 'update_settings {tt_client_key, tt_client_secret, tt_redirect_uri}', 'connect_account {service:"tiktok"} again for the sign-in link.'] });
-    const { url } = social.tiktokAuthUrl();
-    return res.json({ service: s, url, next: 'Open the link, approve, then copy the "code" from the page you land on and call tubedesk_api POST /api/social/tiktok/connect {code}.' });
+    const { url } = social.tiktokAuthUrl({ channel: brand?.id || null });
+    return res.json({ service: s, url, brand: brand?.title || null, next: `Open the link and sign in with ${brand ? `${brand.title}'s` : 'the'} TikTok account (use that brand's browser profile), approve, then copy the "code" from the page you land on and call tubedesk_api POST /api/social/tiktok/connect {code${brand ? `, channel:"${brand.id}"` : ''}}.` });
   }
   if (s === 'instagram') {
-    return res.json({ service: s, configured: pub.instagramStatus().configured, steps: [
-      'Instagram account must be Professional (Creator or Business): Instagram app → Settings → Account type.',
-      'developers.facebook.com → Create app (type Business) → add product "Instagram" → "API setup with Instagram login" → Generate token for your account (permissions: instagram_business_basic, instagram_business_content_publish, instagram_business_manage_insights).',
-      'update_settings {ig_access_token:"<token>", ig_user_id:"<id shown next to the token>", ig_username:"<handle>"}. TubeDesk refreshes the token automatically.',
+    return res.json({ service: s, brand: brand?.title || null, accounts: accounts.list('instagram'), steps: [
+      `The Instagram account${brand ? ` for ${brand.title}` : ''} must be Professional (Creator or Business): Instagram app → Settings → Account type.`,
+      'developers.facebook.com → your app (create one of type Business once) → Instagram → "API setup with Instagram login" → Add account → sign in to that Instagram account → Generate token (permissions: instagram_business_basic, instagram_business_content_publish, instagram_business_manage_insights). One app serves every brand: add each brand\'s account there.',
+      `add_instagram_account {token:"<token>"${brand ? `, channel:"${brand.title}"` : ', channel:"<the brand\'s YouTube channel>"'}} — TubeDesk finds the account, links it to the brand and refreshes the token itself.`,
     ] });
   }
   res.status(400).json({ error: 'service must be google, tiktok or instagram' });
@@ -143,8 +169,15 @@ setup.get('/remote/status', w(async (req, res) => {
   if (isRemote(req)) return res.json(out); // remote callers don't see who else is connected
   res.json({ ...out, ...remote.connections(), pending: remote.pendingRequests() });
 }));
+// ---------- AI apps on this Mac (Claude, Claude Code, Codex, Cursor, Gemini, Copilot, Windsurf, LM Studio) ----------
+setup.get('/ai-clients', (req, res) => {
+  const last = aiClients.lastResult();
+  res.json({ auto: aiClients.autoConnectEnabled(), lastRun: last?.at || null, clients: aiClients.CLIENTS.map(c => ({ id: c.id, name: c.name, installed: !!c.detect(), ...(last?.results?.find(r => r.id === c.id) || {}) })), rule: aiClients.RULE });
+});
+setup.post('/ai-clients/connect', w(async (req, res) => res.json(await aiClients.connectAll({ force: true, remove: req.body?.remove === true, only: Array.isArray(req.body?.only) ? req.body.only : null }))));
 setup.get('/remote/pending', (req, res) => res.json(remote.pendingRequests()));
-setup.post('/remote/enable', w(async (req, res) => res.json(await remote.enableFunnel())));
+setup.post('/remote/enable', w(async (req, res) => res.json(await remote.enableFunnel({ replace: req.body?.replace === true }))));
+setup.post('/remote/auto', w(async (req, res) => res.json(await remote.autoEnable())));
 setup.post('/remote/disable', w(async (req, res) => res.json(await remote.disableFunnel())));
 setup.post('/remote/keys', (req, res) => res.json(remote.createApiKey(req.body?.name)));
 setup.delete('/remote/keys/:id', (req, res) => res.json({ revoked: remote.revokeApiKey(req.params.id) }));

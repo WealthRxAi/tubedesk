@@ -9,7 +9,7 @@ subprocess.run(['pkill', '-f', 'node test/mock-youtube.js']); subprocess.run(['p
 data = tempfile.mkdtemp(prefix='td-ext-')
 mock_port, port = 4777, 4949  # extension host permission is fixed to 4949
 mock = subprocess.Popen(['node', 'test/mock-youtube.js'], cwd=ROOT, env=dict(os.environ, MOCK_PORT=str(mock_port)), stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-env2 = dict(os.environ, PORT=str(port), TUBEDESK_DATA_DIR=data, TUBEDESK_NO_SCHEDULER='1', YT_API_BASE=f'http://127.0.0.1:{mock_port}/youtube/v3', YT_ANALYTICS_BASE=f'http://127.0.0.1:{mock_port}/v2/reports', YT_SUGGEST_URL=f'http://127.0.0.1:{mock_port}/complete/search')
+env2 = dict(os.environ, PORT=str(port), TUBEDESK_DATA_DIR=data, TUBEDESK_NO_SCHEDULER='1', TUBEDESK_NO_AUTOCONNECT='1', YT_API_BASE=f'http://127.0.0.1:{mock_port}/youtube/v3', YT_ANALYTICS_BASE=f'http://127.0.0.1:{mock_port}/v2/reports', YT_SUGGEST_URL=f'http://127.0.0.1:{mock_port}/complete/search')
 srv = subprocess.Popen(['node', 'src/server.js'], cwd=ROOT, env=env2, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 import atexit; atexit.register(lambda: [p.kill() for p in (mock, srv)])
 base = f'http://127.0.0.1:{port}'

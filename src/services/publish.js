@@ -8,6 +8,7 @@ import { db, getSetting, setSetting, today } from '../db.js';
 import { getAccessToken, isAuthorized } from '../youtube/oauth.js';
 import { logApi, quotaToday, ytWrite, YouTubeError } from '../youtube/client.js';
 import * as ch from './channels.js';
+import * as accounts from './accounts.js';
 
 const YT_UPLOAD = process.env.YT_UPLOAD_BASE || 'https://www.googleapis.com/upload/youtube/v3';
 const IG_GRAPH = process.env.IG_GRAPH_BASE || 'https://graph.instagram.com/v21.0';
@@ -218,12 +219,13 @@ export function publishYouTube(params) {
 
 // ---------- Instagram ----------
 export function instagramStatus() {
-  const configured = !!(getSetting('ig_user_id') && getSetting('ig_access_token'));
-  return { configured, username: getSetting('ig_username') || null, userId: getSetting('ig_user_id') || null, tokenRefreshedAt: getSetting('ig_token_refreshed_at') || null, publicUrl: publicUrlMode() };
+  const all = accounts.rows('instagram');
+  const d = all.find(r => r.is_default) || all[0] || null;
+  return { configured: !!(d && d.token), username: d?.username || null, userId: d?.account_id || null, tokenRefreshedAt: d?.token_refreshed_at || null, accounts: all.length, publicUrl: publicUrlMode() };
 }
-export async function ig(pathname, { method = 'GET', params = {} } = {}) {
-  const token = getSetting('ig_access_token');
-  if (!token) throw new Error('Instagram is not configured: add the account ID and access token in Settings → Instagram.');
+export async function ig(pathname, { method = 'GET', params = {}, token: explicitToken = null } = {}) {
+  const token = explicitToken || accounts.current('instagram')?.token;
+  if (!token) throw new Error('Instagram is not configured: add an account (Settings → Social accounts, or the add_instagram_account tool).');
   const u = new URL(`${IG_GRAPH}/${pathname}`);
   for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== null && v !== '') u.searchParams.set(k, String(v));
   u.searchParams.set('access_token', token);
@@ -237,27 +239,55 @@ export async function ig(pathname, { method = 'GET', params = {} } = {}) {
   }
   return j;
 }
+/**
+ * An Instagram token pasted into Settings the old way (no account id yet): ask Instagram who it is and make it an
+ * account, so upgrading from a single-account setup needs nothing. Returns the account row or null.
+ */
+export async function adoptLegacyInstagram() {
+  const token = String(getSetting('ig_access_token', '') || '').trim();
+  if (!token || getSetting('ig_user_id', '') || accounts.rows('instagram').length) return null;
+  const me = await ig('me', { params: { fields: 'user_id,id,username' }, token });
+  const accountId = String(me.user_id || me.id);
+  accounts.upsert('instagram', { accountId, username: me.username || null, token, tokenRefreshedAt: getSetting('ig_token_refreshed_at', '') || null });
+  return accounts.resolve('instagram', accountId);
+}
 export async function instagramTest() {
+  await adoptLegacyInstagram();
   const me = await ig('me', { params: { fields: 'id,username,account_type,media_count' } });
-  setSetting('ig_username', me.username || '');
-  if (me.id && !getSetting('ig_user_id')) setSetting('ig_user_id', me.id);
+  const cur = accounts.current('instagram');
+  if (cur) accounts.upsert('instagram', { accountId: cur.account_id, username: me.username || null });
   return me;
 }
-/** Long-lived Instagram tokens last 60 days; refresh when older than 30. */
-export async function refreshInstagramToken({ force = false } = {}) {
-  const token = getSetting('ig_access_token');
-  if (!token) return { refreshed: false, reason: 'not configured' };
-  const last = Number(getSetting('ig_token_refreshed_at_ms', 0));
-  if (!force && Date.now() - last < 30 * 86400e3) return { refreshed: false, reason: 'fresh' };
-  const u = new URL(IG_REFRESH); u.searchParams.set('grant_type', 'ig_refresh_token'); u.searchParams.set('access_token', token);
+/**
+ * Add (or update) an Instagram professional account from an access token: asks Instagram who it is, stores it, and
+ * optionally links it to one of your YouTube channels (the brand). The first account becomes the default.
+ */
+export async function addInstagramAccount({ token, channel = null, remote = false } = {}) {
+  if (!token || String(token).trim().length < 20) throw Object.assign(new Error('token is required (Instagram API with Instagram Login → Generate token)'), { status: 400 });
+  const me = await ig('me', { params: { fields: 'user_id,id,username,account_type,media_count' }, token: String(token).trim() });
+  const accountId = String(me.user_id || me.id);
+  accounts.upsert('instagram', { accountId, username: me.username || null, token: String(token).trim(), tokenRefreshedAt: new Date().toISOString() });
+  let warning = null;
+  if (channel) { try { accounts.link('instagram', accountId, channel, { onlyIfFree: remote }); } catch (e) { if (e.status !== 403) throw e; warning = e.message; } }
+  return { ...(warning ? { warning } : {}), ...accounts.list('instagram').find(x => x.accountId === accountId), accountType: me.account_type || null, mediaCount: me.media_count ?? null };
+}
+/** Long-lived Instagram tokens last 60 days; refresh when older than 30 (the current account, or every account). */
+export async function refreshInstagramToken({ force = false, all = false } = {}) {
+  if (all) return accounts.eachAccount('instagram', () => refreshInstagramToken({ force }));
+  const row = accounts.current('instagram');
+  if (!row?.token) return { refreshed: false, reason: 'not configured' };
+  const last = Date.parse(row.token_refreshed_at || 0) || 0;
+  if (!force && Date.now() - last < 30 * 86400e3) return { refreshed: false, reason: 'fresh', account: row.username };
+  const u = new URL(IG_REFRESH); u.searchParams.set('grant_type', 'ig_refresh_token'); u.searchParams.set('access_token', row.token);
   const res = await fetch(u, { signal: AbortSignal.timeout(60_000) }); const j = await res.json().catch(() => ({}));
-  if (!res.ok || !j.access_token) return { refreshed: false, reason: j?.error?.message || `status ${res.status}` };
-  setSetting('ig_access_token', j.access_token); setSetting('ig_token_refreshed_at', new Date().toISOString()); setSetting('ig_token_refreshed_at_ms', String(Date.now()));
-  return { refreshed: true, expiresInDays: Math.round((j.expires_in || 0) / 86400) };
+  if (!res.ok || !j.access_token) return { refreshed: false, reason: j?.error?.message || `status ${res.status}`, account: row.username };
+  accounts.updateTokens('instagram', row, { token: j.access_token, tokenRefreshedAt: new Date().toISOString() });
+  return { refreshed: true, account: row.username, expiresInDays: Math.round((j.expires_in || 0) / 86400) };
 }
 
 export function validateInstagram(p = {}) {
-  if (!getSetting('ig_user_id') || !getSetting('ig_access_token')) throw new Error('Instagram is not configured: add the account ID and access token in Settings → Instagram.');
+  const acct = accounts.resolve('instagram', p.account || null);
+  if (!acct?.token) throw new Error(p.account ? `No Instagram account for "${p.account}" — add one (add_instagram_account) or link it to that channel.` : 'Instagram is not configured: add an account (Settings → Social accounts, or the add_instagram_account tool).');
   const kind = p.kind || 'reel';
   if (!['reel', 'image'].includes(kind)) throw new Error("kind must be 'reel' or 'image'.");
   const file = resolveFile(p.file, kind === 'reel' ? VIDEO_EXT : IMAGE_EXT);
@@ -266,14 +296,16 @@ export function validateInstagram(p = {}) {
   if (caption.length > 2200) throw new Error('caption must be 2,200 characters or fewer.');
   if ((caption.match(/#/g) || []).length > 30) throw new Error('caption may contain at most 30 hashtags.');
   const cover = p.cover ? resolveFile(p.cover, IMAGE_EXT) : null;
-  return { kind, file, caption, cover, shareToFeed: p.shareToFeed !== false, thumbOffsetMs: p.thumbOffsetMs ? Number(p.thumbOffsetMs) : undefined, locationId: p.locationId || undefined, collaborators: Array.isArray(p.collaborators) ? p.collaborators : undefined };
+  return { kind, file, caption, cover, shareToFeed: p.shareToFeed !== false, thumbOffsetMs: p.thumbOffsetMs ? Number(p.thumbOffsetMs) : undefined, locationId: p.locationId || undefined, collaborators: Array.isArray(p.collaborators) ? p.collaborators : undefined, account: acct.account_id, accountName: acct.username || acct.account_id };
 }
 
 export function publishInstagram(params) {
   const v = validateInstagram(params);
-  const igUser = getSetting('ig_user_id');
+  const row = accounts.resolve('instagram', v.account);
+  const igUser = row.account_id;
   const id = createJob('instagram', v.file, v.caption.slice(0, 80), { ...v, file: undefined });
-  runJob(id, async log => {
+  accounts.withAccount('instagram', row, () => runJob(id, async log => {
+    log(`account @${v.accountName}`);
     await refreshInstagramToken().then(r => { if (r.refreshed) log('access token refreshed'); }).catch(() => {});
     const lease = await publicLease([v.file, v.cover].filter(Boolean), log);
     try {
@@ -297,7 +329,7 @@ export function publishInstagram(params) {
       try { url = (await ig(pub.id, { params: { fields: 'permalink' } })).permalink || null; } catch { /* permalink is optional */ }
       return { id: pub.id, url };
     } finally { lease.release(); }
-  });
+  }));
   return getJob(id);
 }
 
@@ -364,17 +396,21 @@ export function tunnelActive() { return !!tunnel?.url; }
 export function publishTikTok(params = {}) {
   const file = resolveFile(params.file, VIDEO_EXT);
   const title = String(params.title || '').slice(0, 2200);
-  const id = createJob('tiktok', file, title.slice(0, 80), { ...params, file: undefined });
-  runJob(id, async log => {
+  const row = accounts.resolve('tiktok', params.account || null);
+  if (!row?.refresh_token && !row?.token) throw new Error(params.account ? `No TikTok account for "${params.account}" — connect one (connect_account service "tiktok").` : 'TikTok is not connected (connect_account service "tiktok").');
+  const id = createJob('tiktok', file, title.slice(0, 80), { ...params, file: undefined, account: row.account_id });
+  accounts.withAccount('tiktok', row, () => runJob(id, async log => {
+    log(`account @${row.username || row.account_id}`);
     const { tiktokPublish } = await import('./social.js');
     const r = await tiktokPublish({ ...params, file, title, log });
     return { id: r.id, url: r.url };
-  });
+  }));
   return getJob(id);
 }
 
 export function status() {
-  let tiktok = { configured: false, connected: false };
-  try { const st = db.prepare("SELECT key, value FROM settings WHERE key IN ('tt_client_key','tt_refresh_token','tt_username','tt_audited')").all(); const m = Object.fromEntries(st.map(r => [r.key, r.value])); tiktok = { configured: !!m.tt_client_key, connected: !!m.tt_refresh_token, username: m.tt_username || null, audited: m.tt_audited === '1' }; } catch { /* settings table shape */ }
+  const ttRows = accounts.rows('tiktok');
+  const ttDefault = ttRows.find(r => r.is_default) || ttRows[0] || null;
+  const tiktok = { configured: !!getSetting('tt_client_key'), connected: !!ttDefault?.refresh_token, username: ttDefault?.username || null, accounts: ttRows.length, audited: getSetting('tt_audited', '0') === '1' };
   return { youtube: youtubeStatus(), instagram: instagramStatus(), tiktok, jobs: listJobs({ limit: 10 }), day: today() };
 }

@@ -27,7 +27,7 @@ before(async () => {
   dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'td-plugin-'));
   const port = 6100 + Math.floor(Math.random() * 300);
   base = `http://127.0.0.1:${port}`;
-  server = spawn(process.execPath, ['src/server.js'], { cwd: ROOT, env: { ...process.env, PORT: String(port), TUBEDESK_DATA_DIR: dataDir, TUBEDESK_NO_SCHEDULER: '1' }, stdio: 'ignore' });
+  server = spawn(process.execPath, ['src/server.js'], { cwd: ROOT, env: { ...process.env, PORT: String(port), TUBEDESK_DATA_DIR: dataDir, TUBEDESK_NO_SCHEDULER: '1', TUBEDESK_NO_AUTOCONNECT: '1' }, stdio: 'ignore' });
   for (let i = 0; i < 80; i++) { try { await fetch(base + '/api/status'); break; } catch { await new Promise(r => setTimeout(r, 100)); } }
 });
 after(() => server?.kill());
@@ -42,7 +42,7 @@ test('manifest, marketplace and skills are well-formed and versioned with TubeDe
   const servers = JSON.parse(fs.readFileSync(path.join(PLUGIN, '.mcp.json'), 'utf8')).mcpServers;
   assert.deepEqual(servers.tubedesk.args, ['${CLAUDE_PLUGIN_ROOT}/mcp/server.js']);
   const skills = fs.readdirSync(path.join(PLUGIN, 'skills'));
-  assert.deepEqual(skills.sort(), ['channel-checkup', 'make-shorts', 'package-video', 'publish-video', 'tubedesk', 'video-ideas']);
+  assert.deepEqual(skills.sort(), ['channel-checkup', 'make-shorts', 'package-video', 'publish-video', 'setup-tubedesk', 'tubedesk', 'video-ideas']);
   for (const s of skills) {
     const md = fs.readFileSync(path.join(PLUGIN, 'skills', s, 'SKILL.md'), 'utf8');
     const fm = /^---\n([\s\S]*?)\n---\n/.exec(md);
@@ -64,9 +64,11 @@ test('every tool the skills name exists, and every API route they name exists', 
   const tools = new Set((await c.rpc('tools/list')).result.tools.map(t => t.name));
   c.close();
   const flat = (await (await fetch(base + '/api/agent')).text()).replace(/[ \t]+/g, ' ');
+  const settingKeys = new Set((await (await fetch(base + '/api/config')).json()).settings.map(x => x.key));
   for (const s of fs.readdirSync(path.join(PLUGIN, 'skills'))) {
     const md = fs.readFileSync(path.join(PLUGIN, 'skills', s, 'SKILL.md'), 'utf8');
-    for (const [, name] of md.matchAll(/`([a-z]+(?:_[a-z]+)+)`/g)) assert.ok(tools.has(name), `${s}: tool ${name} does not exist`);
+    for (const [, name] of md.matchAll(/`([a-z]+(?:_[a-z]+)+)`/g)) assert.ok(tools.has(name) || settingKeys.has(name), `${s}: ${name} is neither a tool nor a setting`);
+    for (const [, keys] of md.matchAll(/update_settings \{([^}]+)\}/g)) for (const k of keys.split(',').map(x => x.trim().split(':')[0]).filter(Boolean)) assert.ok(settingKeys.has(k), `${s}: setting ${k} does not exist`);
     for (const [, method, route] of md.matchAll(/`tubedesk_api (GET|POST) (\/api\/[^`\s]+)`?/g)) {
       const pattern = route.replace(/<[^>]+>/g, ':x').replace(/^\/api/, '');
       const head = pattern.split('/:x')[0];

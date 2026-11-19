@@ -15,8 +15,9 @@ Ask Claude things like:
 
 | Component | Purpose |
 |---|---|
-| MCP server `tubedesk` | 43 tools: setup and configuration, research, radar, analytics, autopilot, rendering, voiceover, thumbnails, Shorts, publishing, Instagram/TikTok research, plus `tubedesk_api` for any route |
-| Skill `tubedesk` | How Claude operates TubeDesk: channel selection, quota, honest radar reading, publishing rules |
+| MCP server `tubedesk` | 46 tools: setup and configuration, brands and their Instagram/TikTok accounts, research, radar, analytics, autopilot, rendering, voiceover, thumbnails, Shorts, publishing, Instagram/TikTok research, plus `tubedesk_api` for any route |
+| Skill `tubedesk` | How Claude operates TubeDesk: brands, quota, honest radar reading, publishing rules |
+| Skill `setup-tubedesk` | Claude configures TubeDesk end to end — keys, every channel, every brand's Instagram/TikTok, alerts, remote access |
 | Skill `video-ideas` | Evidence-backed, radar-scored video ideas |
 | Skill `package-video` | Titles, thumbnails and hook, scored and refined |
 | Skill `channel-checkup` | Diagnose the one lever that matters and act on it |

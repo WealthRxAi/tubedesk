@@ -36,6 +36,7 @@ import * as transcribe from '../services/transcribe.js';
 import * as igwatch from '../services/igwatch.js';
 import { runDailySnapshot } from '../jobs/scheduler.js';
 import { setup } from './setup.js';
+import * as accounts from '../services/accounts.js';
 
 export const api = Router();
 api.use(setup); // setup checklist, validated settings, tools/OpenAPI, remote access — and the guard for remote callers
@@ -48,7 +49,7 @@ api.get('/status', w(async (req, res) => {
   res.json({
     configured: { apiKey: !!s.yt_api_key, oauth: !!(s.google_client_id && s.google_client_secret) },
     ai: await ai.status(), quota: quotaToday(), channels: ch.listChannels().length,
-    lastSnapshot: s.last_snapshot ? JSON.parse(s.last_snapshot) : null, version: '1.9.0', dataDir: DATA_DIR,
+    lastSnapshot: s.last_snapshot ? JSON.parse(s.last_snapshot) : null, version: '2.0.0', dataDir: DATA_DIR,
   });
 }));
 api.get('/settings', (req, res) => {
@@ -119,24 +120,35 @@ api.get('/social/ig/lookup', w(async (req, res) => { try { res.json(await social
 api.get('/social/ig/outliers', (req, res) => res.json(social.igOutliers({ days: Number(req.query.days || 90), minX: Number(req.query.minX || 1.5), limit: Number(req.query.limit || 50), username: req.query.username || null, reelsOnly: req.query.reels === '1' })));
 api.get('/social/ig/hashtag', w(async (req, res) => { try { res.json(await social.igHashtag(req.query.q, { kind: req.query.kind || 'top', limit: Number(req.query.limit || 50) })); } catch (e) { res.status(400).json({ error: e.message }); } }));
 api.get('/social/tiktok/status', (req, res) => res.json(social.tiktokStatus()));
-api.get('/social/tiktok/auth-url', (req, res) => { try { res.json(social.tiktokAuthUrl()); } catch (e) { res.status(400).json({ error: e.message }); } });
-api.post('/social/tiktok/connect', w(async (req, res) => { try { res.json(await social.tiktokConnect(req.body?.code)); } catch (e) { res.status(400).json({ error: e.message }); } }));
-api.post('/social/tiktok/disconnect', (req, res) => { for (const k of ['tt_access_token', 'tt_refresh_token', 'tt_open_id', 'tt_username', 'tt_display_name', 'tt_access_expires_at']) setSetting(k, ''); res.json({ connected: false }); });
+api.get('/social/tiktok/auth-url', (req, res) => { try { res.json(social.tiktokAuthUrl({ channel: req.query.channel || null })); } catch (e) { res.status(400).json({ error: e.message }); } });
+// Calls from remote AI apps (through the public listener) carry this header; they may add a brand's first account, not re-point existing ones.
+const fromRemote = req => req.headers['x-tubedesk-origin'] === 'remote';
+api.post('/social/tiktok/connect', w(async (req, res) => { try { res.json(await social.tiktokConnect(req.body?.code, { channel: req.body?.channel || null, state: req.body?.state || null, remote: fromRemote(req) })); } catch (e) { res.status(400).json({ error: e.message }); } }));
+api.post('/social/tiktok/disconnect', (req, res) => { try { const removed = accounts.remove('tiktok', req.body?.account || null); const left = accounts.list('tiktok'); res.json({ removed, connected: left.length > 0, accounts: left }); } catch (e) { res.status(400).json({ error: e.message }); } });
 api.get('/social/tiktok/me', w(async (req, res) => res.json(await social.tiktokMe())));
-api.post('/social/tiktok/sync', w(async (req, res) => res.json(await social.tiktokSyncVideos({ max: Number(req.body?.max || 100) }))));
-api.get('/social/tiktok/videos', (req, res) => res.json(social.tiktokVideos({ limit: Number(req.query.limit || 50) })));
+api.post('/social/tiktok/sync', w(async (req, res) => res.json(req.body?.account ? await accounts.withAccount('tiktok', accounts.resolve('tiktok', req.body.account), () => social.tiktokSyncVideos({ max: Number(req.body?.max || 100) })) : await social.tiktokSyncVideos({ max: Number(req.body?.max || 100), all: true }))));
+api.get('/social/tiktok/videos', (req, res) => { try { res.json(social.tiktokVideos({ limit: Number(req.query.limit || 50), account: req.query.account || null })); } catch (e) { res.status(400).json({ error: e.message }); } });
+
+// ---------- Instagram + TikTok accounts (one per brand, each linked to a YouTube channel) ----------
+api.get('/social-accounts', (req, res) => res.json(accounts.list(req.query.platform || null)));
+api.post('/social-accounts/instagram', w(async (req, res) => { try { res.json(await pub.addInstagramAccount({ token: req.body?.token, channel: req.body?.channel || null, remote: fromRemote(req) })); } catch (e) { res.status(e.status || 400).json({ error: e.message }); } }));
+api.post('/social-accounts/:platform/:account/link', (req, res) => { try { res.json(accounts.link(req.params.platform, req.params.account, req.body?.channel || null, { onlyIfFree: fromRemote(req) })); } catch (e) { res.status(e.status || 400).json({ error: e.message }); } });
+api.post('/social-accounts/:platform/:account/default', (req, res) => { try { res.json(accounts.setDefault(req.params.platform, req.params.account)); } catch (e) { res.status(e.status || 400).json({ error: e.message }); } });
+api.delete('/social-accounts/:platform/:account', (req, res) => { try { res.json({ removed: accounts.remove(req.params.platform, req.params.account) }); } catch (e) { res.status(e.status || 400).json({ error: e.message }); } });
 
 api.post('/publish/instagram', w(async (req, res) => {
   let job;
+  await pub.adoptLegacyInstagram().catch(() => null);
   // Instagram has no scheduling API: a future publishAt (or "best") goes into TubeDesk's publish queue.
   if (req.body?.publishAt) {
     try {
-      pub.validateInstagram(req.body);
+      const v = pub.validateInstagram(req.body);
+      const brand = accounts.resolve('instagram', v.account)?.channel_id || ch.listChannels('owned')[0]?.id || null;
       let at = req.body.publishAt, slot = null;
-      if (at === 'best') { const owned = ch.listChannels('owned')[0]; slot = owned ? slots.bestSlots(owned.id, { format: 'short', count: 1 })[0] : null; at = slot?.at || new Date(Date.now() + 3600e3).toISOString(); }
+      if (at === 'best') { slot = brand ? slots.bestSlots(brand, { format: 'short', count: 1 })[0] : null; at = slot?.at || new Date(Date.now() + 3600e3).toISOString(); }
       if (Number.isNaN(Date.parse(at))) throw new Error('publishAt must be an ISO-8601 date-time or "best".');
       const { publishAt, wait, ...params } = req.body;
-      return res.json({ queued: clips.enqueue({ platform: 'instagram', params, runAt: at, publishAt: at }), slot });
+      return res.json({ queued: clips.enqueue({ platform: 'instagram', channelId: brand, params: { ...params, account: v.account }, runAt: at, publishAt: at }), slot });
     } catch (e) { return res.status(400).json({ error: e.message }); }
   }
   try { job = pub.publishInstagram(req.body || {}); } catch (e) { return res.status(400).json({ error: e.message }); }
@@ -144,7 +156,7 @@ api.post('/publish/instagram', w(async (req, res) => {
   res.status(job.status === 'failed' ? 502 : 200).json(job);
 }));
 api.post('/publish/instagram/test', w(async (req, res) => res.json(await pub.instagramTest())));
-api.post('/publish/instagram/refresh-token', w(async (req, res) => res.json(await pub.refreshInstagramToken({ force: true }))));
+api.post('/publish/instagram/refresh-token', w(async (req, res) => { const all = await pub.refreshInstagramToken({ force: true, all: true }); res.json({ ...(all[0] || { refreshed: false, reason: 'not configured' }), accounts: all }); }));
 // Machine-readable contract so any model can publish without reading the source.
 api.get('/publish/schema', (req, res) => res.json(PUBLISH_SCHEMA));
 /** Every registered /api route, read from the router itself, so the guide can never miss one. */
@@ -483,7 +495,7 @@ api.get('/portfolio', w(async (req, res) => res.json(await portfolio.overview())
 api.post('/portfolio/weekly-summary', w(async (req, res) => res.json(await portfolio.weeklySummary({ send: req.body?.send !== false }))));
 
 // ---------- Instagram reels ----------
-api.post('/instagram/sync', w(async (req, res) => res.json(await igwatch.syncMedia({ limit: Number(req.body?.limit || 25) }))));
+api.post('/instagram/sync', w(async (req, res) => res.json(await igwatch.syncMedia({ limit: Number(req.body?.limit || 25), all: true }))));
 
 // ---------- browser extension ----------
 // Watch page: public stats for any video + outlier context from a cheap sample of that channel's recent uploads (≤ 3 units when uncached).

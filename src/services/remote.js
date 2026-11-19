@@ -274,16 +274,22 @@ export async function tunnelStatus() {
   const fs_ = await run(bin, ['funnel', 'status', '--json'], 8000);
   let f = null; try { f = JSON.parse(fs_.out || '{}'); } catch { f = null; }
   const funnelOn = !!(f && f.AllowFunnel && Object.values(f.AllowFunnel).some(Boolean));
-  const target = JSON.stringify(f?.Web || {});
-  const pointsHere = target.includes(`127.0.0.1:${port}`) || target.includes(`localhost:${port}`);
+  // where each served path forwards to (exact port, so 49500 is not mistaken for 4950)
+  const proxies = Object.values(f?.Web || {}).flatMap(h => Object.values(h?.Handlers || {}).map(x => String(x?.Proxy || x?.Path || x?.Text || 'other')));
+  const here = new RegExp(`^https?://(127\\.0\\.0\\.1|localhost):${port}(/|$)`);
+  const pointsHere = proxies.some(x => here.test(x));
+  const otherUse = proxies.some(x => !here.test(x)); // the owner serves something else through Tailscale
   if (url && funnelOn && pointsHere && publicUrl() !== url) setSetting('remote_public_url', url);
-  return { ...base, publicUrl: url, state: funnelOn && pointsHere ? 'on' : 'off', next: funnelOn && pointsHere ? null : 'Turn on remote access.' };
+  const on = funnelOn && pointsHere;
+  return { ...base, publicUrl: url, state: on ? 'on' : 'off', otherUse, next: on ? null : otherUse ? 'Tailscale Serve/Funnel is already used for something else on this Mac — turning remote access on would replace it.' : 'Turn on remote access.' };
 }
 
 /** Point Tailscale Funnel (https 443) at the public listener. */
-export async function enableFunnel() {
+export async function enableFunnel({ replace = false } = {}) {
+  setSetting('remote_off_by_user', '0');
   const bin = tailscaleBinary();
   if (!bin) throw httpErr(400, 'not_installed', 'Tailscale is not installed. Run: brew install --cask tailscale — open the app, sign in (free), then try again.');
+  if (!replace) { const cur = await tunnelStatus(); if (cur.state === 'on') return cur; if (cur.otherUse) throw httpErr(409, 'tailscale_in_use', `${cur.next} Turn it on with replace:true to use Tailscale for TubeDesk instead.`); }
   const r = await run(bin, ['funnel', '--bg', '--yes', String(remotePort())], 30000);
   const text = r.out + r.err;
   const enableUrl = (text.match(/https:\/\/login\.tailscale\.com\/[^\s]+/) || [])[0];
@@ -294,8 +300,31 @@ export async function enableFunnel() {
   return st;
 }
 export async function disableFunnel() {
+  setSetting('remote_seen_on', '0');
   const bin = tailscaleBinary();
   if (bin) await run(bin, ['funnel', '--https=443', 'off'], 15000);
   setSetting('remote_public_url', '');
+  setSetting('remote_off_by_user', '1'); // auto-enable respects an explicit "off"
   return tunnelStatus();
+}
+
+/**
+ * Turn remote access on by itself once Tailscale is installed and signed in (checked at start and every 10 minutes),
+ * unless the owner turned it off. If Tailscale wants Funnel allowed for this Mac, the owner gets that link once by phone.
+ */
+export async function autoEnable() {
+  if (getSetting('remote_auto', '1') === '0' || getSetting('remote_off_by_user', '0') === '1') return { skipped: 'off' };
+  const st = await tunnelStatus();
+  if (st.state === 'on') { setSetting('remote_seen_on', '1'); return { state: 'on' }; }
+  if (st.state === 'not-installed' || st.state === 'signed-out') return { state: st.state };
+  // Never take over a Funnel/Serve setup the owner uses for something else.
+  if (st.otherUse) return { skipped: 'tailscale-in-use', next: st.next };
+  // It was on and the owner switched Funnel off in Tailscale itself: respect that like TubeDesk's own off switch.
+  if (getSetting('remote_seen_on', '0') === '1') { setSetting('remote_off_by_user', '1'); return { skipped: 'off', reason: 'turned off in Tailscale' }; }
+  const r = await enableFunnel();
+  if (r.state === 'needs-approval' && getSetting('remote_approval_sent', '') !== r.approveUrl) {
+    setSetting('remote_approval_sent', r.approveUrl);
+    notify({ kind: 'remote_access', force: true, title: 'TubeDesk: one tap to finish remote access', body: `Tailscale asks you to allow TubeDesk's private web address once. Open: ${r.approveUrl}`, url: r.approveUrl }).catch(() => {});
+  }
+  return r;
 }

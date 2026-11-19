@@ -164,6 +164,17 @@ curl -X POST 'localhost:4949/api/publish/youtube?wait=1' -H 'content-type: appli
 ```
 
 
+## Zero setup: install once, every AI uses it
+
+Like installing vidIQ — after `./install-mac.sh`, TubeDesk shows up in every AI you use, for every brand, without being told:
+
+- **Every AI app on this Mac connects itself** at every start: Claude (desktop), Claude Code (full plugin with skills), Codex, Cursor, Gemini CLI, GitHub Copilot (CLI + VS Code), Windsurf, LM Studio. Each gets the `tubedesk` tools and a standing rule — use TubeDesk for anything about your YouTube, Instagram and TikTok, never vidIQ. Your own settings are never overwritten (files are backed up once; entries you made yourself are left alone). Settings → *AI apps on this Mac* shows the status and can disconnect everything.
+- **Every AI knows all your brands**: each owned YouTube channel with its linked Instagram and TikTok accounts is part of the tool instructions, so no one has to say which channel. "All channels" means all of them.
+- **One Instagram and TikTok account per brand**: add as many accounts as you have brands (`add_instagram_account`, TikTok sign-in per account) and link each to its YouTube channel. Shorts, the reels radar, scheduled posts and the weekly board use each brand's own accounts; a brand without an account is skipped rather than posting to another brand.
+- **The AI sets TubeDesk up**: ask any AI to "set up TubeDesk" — the `setup-tubedesk` skill (and `setup_status`) walk it through API keys, every channel's Google sign-in, every brand's Instagram/TikTok, alerts and remote access in your browser. You only sign in and click Allow.
+- **Remote access turns itself on** as soon as Tailscale is signed in (checked every 10 minutes); if Tailscale needs you to allow Funnel once, the link arrives on your phone. It never replaces a Tailscale Serve/Funnel setup you use for something else, and stays off once you turn it off (in TubeDesk or in Tailscale).
+- **Remote AI apps can add accounts, not take them over**: an approved app may add a brand's first Instagram/TikTok account; moving, removing or changing the default account, and the token settings, stay on the Mac.
+
 ## Use TubeDesk from any AI
 
 Like vidIQ, TubeDesk works inside the AI you already use — ChatGPT, Claude (web, phone, desktop, Code), Gemini, Grok, Cursor, Codex, n8n — and the AI can **set TubeDesk up for you**: ask it to "set up TubeDesk" and it checks `setup_status`, fills in settings with `update_settings`, adds your channels and competitors, and hands you the one consent link it can't click for you.

@@ -8,6 +8,7 @@ import { watchHours } from './analytics.js';
 import { channelSummary } from './reach.js';
 import { currentModel } from './radar.js';
 import { notify } from './notify.js';
+import * as accounts from './accounts.js';
 import './clips.js'; import './autopilot.js'; import './ideas.js'; // their tables are read here
 
 const DAY = 86400000;
@@ -71,19 +72,28 @@ export async function channelCard(ch) {
   };
 }
 
-function instagramCard() {
-  if (!db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'ig_media'").get() || !getSetting('ig_user_id')) return null;
+function instagramCard(acct) {
+  if (!db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'ig_media'").get()) return null;
   const since = new Date(Date.now() - 7 * DAY).toISOString();
-  const recent = db.prepare("SELECT * FROM ig_media WHERE published_at >= ? AND (product_type = 'REELS' OR media_type = 'VIDEO') ORDER BY views DESC").all(since);
-  const w = db.prepare("SELECT idx, status FROM radar_watch WHERE kind = 'instagram' ORDER BY published_at DESC LIMIT 1").get() || null;
-  return { username: getSetting('ig_username') || null, reels7: recent.length, views7: recent.reduce((a, r) => a + (r.views || 0), 0), best: recent[0] ? { caption: String(recent[0].caption || '').split('\n')[0].slice(0, 80), views: recent[0].views, permalink: recent[0].permalink } : null, latestPace: w?.idx ?? null, latestStatus: w?.status ?? null };
+  const recent = db.prepare("SELECT * FROM ig_media WHERE ig_user_id = ? AND published_at >= ? AND (product_type = 'REELS' OR media_type = 'VIDEO') ORDER BY views DESC").all(acct.account_id, since);
+  const w = db.prepare("SELECT idx, status FROM radar_watch WHERE kind = 'instagram' AND channel_id = ? ORDER BY published_at DESC LIMIT 1").get('ig:' + acct.account_id) || null;
+  return { platform: 'instagram', username: acct.username || null, channelId: acct.channel_id || null, reels7: recent.length, views7: recent.reduce((a, r) => a + (r.views || 0), 0), best: recent[0] ? { caption: String(recent[0].caption || '').split('\n')[0].slice(0, 80), views: recent[0].views, permalink: recent[0].permalink } : null, latestPace: w?.idx ?? null, latestStatus: w?.status ?? null };
+}
+function tiktokCard(acct) {
+  if (!db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'tiktok_videos'").get()) return null;
+  const since = new Date(Date.now() - 7 * DAY).toISOString();
+  const recent = db.prepare('SELECT * FROM tiktok_videos WHERE open_id = ? AND published_at >= ? ORDER BY views DESC').all(acct.account_id, since);
+  return { platform: 'tiktok', username: acct.username || null, channelId: acct.channel_id || null, videos7: recent.length, views7: recent.reduce((a, r) => a + (r.views || 0), 0), best: recent[0] ? { caption: String(recent[0].title || recent[0].description || '').split('\n')[0].slice(0, 80), views: recent[0].views, permalink: recent[0].share_url } : null };
+}
+function socialCards() {
+  return [...accounts.rows('instagram').map(instagramCard), ...accounts.rows('tiktok').map(tiktokCard)].filter(Boolean);
 }
 
 export async function overview() {
   const channels = [];
   for (const ch of listChannels('owned')) channels.push(await channelCard(ch));
   const sum = k => channels.reduce((a, c) => a + (c[k] || 0), 0);
-  return { generatedAt: new Date().toISOString(), totals: { subscribers: sum('subscribers'), views7: channels.some(c => c.views7 !== null) ? sum('views7') : null, subs7: channels.some(c => c.subs7 !== null) ? sum('subs7') : null, alertsOpen: sum('alertsOpen') }, channels, instagram: instagramCard() };
+  return { generatedAt: new Date().toISOString(), totals: { subscribers: sum('subscribers'), views7: channels.some(c => c.views7 !== null) ? sum('views7') : null, subs7: channels.some(c => c.subs7 !== null) ? sum('subs7') : null, alertsOpen: sum('alertsOpen') }, channels, social: socialCards(), instagram: socialCards().find(x => x.platform === 'instagram') || null };
 }
 
 const n = x => x === null || x === undefined ? '—' : Math.round(x).toLocaleString('en-US');
@@ -104,7 +114,9 @@ export async function weeklySummary({ send = true } = {}) {
     if (c.alertsOpen) parts.push(`${c.alertsOpen} open alert${c.alertsOpen > 1 ? 's' : ''}`);
     lines.push('• ' + parts.join(' · '));
   }
-  if (o.instagram) lines.push(`• Instagram${o.instagram.username ? ' @' + o.instagram.username : ''}: ${o.instagram.reels7} reels, ${n(o.instagram.views7)} views${o.instagram.best ? ` · best: "${o.instagram.best.caption}" ${n(o.instagram.best.views)}` : ''}`);
+  for (const s of o.social) lines.push(s.platform === 'instagram'
+    ? `• Instagram${s.username ? ' @' + s.username : ''}: ${s.reels7} reels, ${n(s.views7)} views${s.best ? ` · best: "${s.best.caption}" ${n(s.best.views)}` : ''}`
+    : `• TikTok${s.username ? ' @' + s.username : ''}: ${s.videos7} videos, ${n(s.views7)} views${s.best ? ` · best: "${s.best.caption}" ${n(s.best.views)}` : ''}`);
   const text = lines.join('\n') || 'No owned channels yet.';
   let sent = null;
   if (send) sent = await notify({ kind: 'weekly_summary', title: 'TubeDesk weekly summary', body: text });
