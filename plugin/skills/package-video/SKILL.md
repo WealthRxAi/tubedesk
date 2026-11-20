@@ -5,7 +5,7 @@ description: >
   "make a thumbnail", "test thumbnails", "package this video", "improve my title and thumbnail", "rate my hook",
   or wants title/thumbnail options for a YouTube video or Short before publishing, using TubeDesk's virality radar.
 metadata:
-  version: "2.0.0"
+  version: "2.1.0"
 ---
 
 # Packaging a video (title, thumbnail, hook)

@@ -26,8 +26,8 @@ CREATE TABLE IF NOT EXISTS social_accounts (
 `);
 
 const als = new AsyncLocalStorage();
-const PLATFORMS = ['instagram', 'tiktok'];
-const assertPlatform = p => { if (!PLATFORMS.includes(p)) throw new Error('platform must be instagram or tiktok'); };
+export const PLATFORMS = ['instagram', 'tiktok', 'threads', 'facebook', 'linkedin'];
+const assertPlatform = p => { if (!PLATFORMS.includes(p)) throw Object.assign(new Error(`platform must be one of ${PLATFORMS.join(', ')}`), { status: 400 }); };
 
 // ---------- legacy single-account settings ⇄ default account ----------
 const LEGACY = {
@@ -41,6 +41,7 @@ const LEGACY = {
  */
 function syncLegacy(platform) {
   const L = LEGACY[platform];
+  if (!L) return; // newer platforms never had single-account settings
   const id = getSetting(L.id, ''), token = getSetting(L.token, '');
   if (!id || !token) return;
   const row = db.prepare('SELECT * FROM social_accounts WHERE platform = ? AND account_id = ?').get(platform, id);
@@ -59,6 +60,7 @@ function syncLegacy(platform) {
 /** Keep the legacy settings equal to the default account (older code paths and the Settings page read them). */
 function mirrorDefault(platform) {
   const L = LEGACY[platform];
+  if (!L) return;
   const d = db.prepare('SELECT * FROM social_accounts WHERE platform = ? AND is_default = 1').get(platform);
   const set = (k, v) => { if (k) setSetting(k, v ?? ''); };
   set(L.id, d?.account_id); set(L.token, d?.token); set(L.username, d?.username);

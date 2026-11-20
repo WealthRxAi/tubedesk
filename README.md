@@ -164,6 +164,29 @@ curl -X POST 'localhost:4949/api/publish/youtube?wait=1' -H 'content-type: appli
 ```
 
 
+## Built to keep working (reliability)
+
+TubeDesk runs unattended on your Mac, so it looks after itself:
+
+- **Retries and timeouts on every outside call** (YouTube, Google sign-in, Instagram, TikTok, Threads, Facebook, LinkedIn, AI, voice). Network drops, timeouts, 429s and 5xx errors are retried with backoff; actions that may already have happened (posting a comment, publishing) are never sent twice.
+- **YouTube's quota on YouTube's clock**: the ledger counts Pacific days (when Google actually resets it). If Google says the quota is gone, TubeDesk stops calling until the reset, and scheduled work picks up again after midnight Pacific. A reserve is kept for scheduled uploads and autopilot reverts.
+- **No missed jobs**: every scheduled job is logged. If the Mac was asleep or a run failed, it is retried (every 10 minutes, backing off after failures), while a fresh install doesn't fire every daily job at once.
+- **Nightly backups** (7 daily + 8 weekly, checked for integrity) and one-click restore; housekeeping keeps the database small.
+- **Morning check-up** (Health page, `health` tool): database, disk, backups, quota, every channel's Google sign-in, Instagram/TikTok tokens, jobs, the publishing queue, ffmpeg/transcriber, alerts, updates — each with the exact fix, texted once a day when something breaks. It also recognises Google's 7-day sign-in expiry for OAuth apps left in "Testing" and says how to stop it.
+- **Self-updating with rollback**: every night it fast-forwards to the latest version on GitHub (never over local edits). If a new version fails to start three times, the boot guard puts the previous version back and skips that version.
+- **Crash-safe**: a stray error is logged instead of taking TubeDesk down; a real crash restarts cleanly under launchd; the database is closed properly on shutdown.
+
+## Research and workflow
+
+- **Outlier index**: every morning TubeDesk spends spare quota (1,500 units by default, always leaving 3,000 free) searching your niches and keeps every video it sees, with views ÷ that channel's average. It becomes your own searchable outlier database — free to search, growing every day. On top of it: a **niche finder** (small or young channels pulling outsized views), **title formulas** ("I Tried [X] for [N] Days", with how many outliers use each and how well they do) and **similar thumbnails** (a perceptual hash + colour layout of every thumbnail seen; search by video or by an image you're designing).
+- **Rank tracker**: daily position of your videos in YouTube search for your keywords (100 units per keyword), with 7-day change.
+- **Competitor audience**: questions and requests under your competitors' best recent videos, grouped by topic — they also feed the daily idea list.
+- **Bulk editor**: change titles, descriptions or tags across many videos — preview (problems flagged), apply, undo.
+- **Shorts from any video**: TubeDesk finds each upload's original file on your Mac (same length, in Movies/Downloads/Desktop/Documents) so Shorts can be cut from any of your videos, not only ones it published.
+- **Make a video**: idea → script → titles scored on the radar → your own voice with word-timed captions → background (your footage, an AI image, or a clean branded card) → render → cover → optionally scheduled at your best slot on YouTube and the brand's Instagram/TikTok. One call: `make_video`.
+- **More places to publish**: Instagram carousels and Stories; Threads, Facebook Pages and LinkedIn through their free official APIs, one account per brand. (X is not supported: its API charges for posting.)
+- **On your phone**: once Tailscale is signed in, TubeDesk serves the full app privately on your tailnet (never the internet) and texts you the address. Install the free Tailscale app on your phone, open the address, "Add to Home Screen". Only requests from your own Tailscale login on a tailnet address are accepted.
+
 ## Zero setup: install once, every AI uses it
 
 Like installing vidIQ — after `./install-mac.sh`, TubeDesk shows up in every AI you use, for every brand, without being told:

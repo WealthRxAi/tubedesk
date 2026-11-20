@@ -2,6 +2,7 @@
 import crypto from 'node:crypto';
 import { getAccessToken } from './oauth.js';
 import { cacheGet, cacheSet, logApi, YouTubeError } from './client.js';
+import { fetchRetry } from '../lib/http.js';
 
 const BASE = process.env.YT_ANALYTICS_BASE || 'https://youtubeanalytics.googleapis.com/v2/reports';
 
@@ -13,7 +14,7 @@ export async function analyticsQuery(channelId, { startDate, endDate, metrics, d
   const url = new URL(BASE);
   for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, String(v));
   const t0 = Date.now();
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${await getAccessToken(channelId)}` } });
+  const res = await fetchRetry(url, { headers: { Authorization: `Bearer ${await getAccessToken(channelId)}` } });
   const body = await res.json().catch(() => ({}));
   const ms = Date.now() - t0;
   if (!res.ok) {

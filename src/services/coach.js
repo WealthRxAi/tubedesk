@@ -9,6 +9,7 @@ import { channelHealth } from './packaging.js';
 import { titlePatterns, formatLabel } from './discovery.js';
 import { median } from './stats.js';
 import * as ai from './ai.js';
+import { fetchRetry } from '../lib/http.js';
 
 export function channelContext(channelId, { videos = 40 } = {}) {
   const ch = getChannel(channelId);
@@ -105,7 +106,7 @@ export async function ownedTranscript(channelId, videoId) {
   const track = tracks.find(t => t.snippet.trackKind === 'standard') || tracks.find(t => t.snippet.language?.startsWith('en')) || tracks[0];
   const url = new URL(`${process.env.YT_API_BASE || 'https://www.googleapis.com/youtube/v3'}/captions/${track.id}`);
   url.searchParams.set('tfmt', 'srt');
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${await getAccessToken(channelId)}` } });
+  const res = await fetchRetry(url, { headers: { Authorization: `Bearer ${await getAccessToken(channelId)}` } });
   if (!res.ok) throw new Error(`captions.download failed ${res.status}`);
   const srt = await res.text();
   const { logApi } = await import('../youtube/client.js');

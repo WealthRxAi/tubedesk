@@ -23,6 +23,10 @@ import * as aiClients from '../services/ai-clients.js';
 import { setSetting } from '../db.js';
 import { TOOLS, createToolRunner } from '../../mcp/tools.js';
 import { openapi } from '../services/openapi.js';
+import * as health from '../services/health.js';
+import * as backup from '../services/backup.js';
+import * as jobs from '../services/jobs.js';
+import * as updater from '../services/updater.js';
 
 export const setup = Router();
 const w = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -42,6 +46,8 @@ export function remoteGuard(req, res, next) {
   // Which Instagram/TikTok account each brand posts to: remote apps may add accounts (and link a brand's first one),
   // but removing, disconnecting or changing the default happens on the Mac.
   if ((p.startsWith('/social-accounts/') && (req.method === 'DELETE' || p.endsWith('/default'))) || p === '/social/tiktok/disconnect') return res.status(403).json({ error: 'Removing accounts or changing the default account can only be done on the Mac running TubeDesk (Settings → Social accounts).' });
+  // Backups, restores and updates replace the program or its data: Mac only.
+  if ((p.startsWith('/backups') || p.startsWith('/update') || p.startsWith('/jobs')) && req.method !== 'GET') return res.status(403).json({ error: 'Backups, updates and scheduled jobs are managed on the Mac.' });
   if (p === '/plugin/download' || p.startsWith('/admin') || p.startsWith('/system') || p === '/notify/log' || (p.startsWith('/ai-clients') && req.method !== 'GET')) return res.status(403).json({ error: 'Only available on the Mac.' });
   // Files a remote app asks TubeDesk to write must be media in the user's media folders or TubeDesk's data folder.
   const out = req.body && typeof req.body === 'object' ? req.body.output : undefined;
@@ -52,6 +58,25 @@ export function remoteGuard(req, res, next) {
   next();
 }
 setup.use(remoteGuard);
+
+// ---------- health, jobs, backups, updates ----------
+setup.get('/health', w(async (req, res) => res.json(await health.check({ deep: req.query.deep === '1' }))));
+setup.post('/health/doctor', w(async (req, res) => res.json(await health.doctor())));
+setup.get('/jobs', (req, res) => res.json({ jobs: jobs.status(), overdue: jobs.overdue() }));
+setup.post('/jobs/:name/run', w(async (req, res) => {
+  const p = jobs.runJob(String(req.params.name), 'manual');
+  if (req.query.wait === '1') return res.json({ ok: true, result: await p });
+  p.catch(() => {}); res.json({ started: req.params.name });
+}));
+setup.get('/backups', (req, res) => res.json({ backups: backup.list(), dir: backup.BACKUP_DIR }));
+setup.post('/backups', w(async (req, res) => res.json(await backup.create({ force: true }))));
+setup.post('/backups/restore', w(async (req, res) => {
+  const r = backup.stageRestore(req.body?.file);
+  res.json({ ...r, restarting: updater.supervised() });
+  if (updater.supervised()) setTimeout(() => process.exit(0), 800);
+}));
+setup.get('/update', w(async (req, res) => res.json({ auto: updater.enabled(), supervised: updater.supervised(), last: JSON.parse(getSetting('update_last', 'null') || 'null'), status: req.query.check === '1' ? await updater.check() : updater.lastCheck() })));
+setup.post('/update/apply', w(async (req, res) => res.json(await updater.apply())));
 
 // ---------- setup checklist ----------
 setup.get('/setup', w(async (req, res) => {
@@ -98,8 +123,9 @@ setup.get('/brands', (req, res) => {
   const igs = accounts.list('instagram'), tts = accounts.list('tiktok');
   const brands = ch.listChannels('owned').map(c => {
     const ig = igs.find(a => a.channelId === c.id), tt = tts.find(a => a.channelId === c.id);
+    const other = Object.fromEntries(['threads', 'facebook', 'linkedin'].map(p => { const a = accounts.list(p).find(x => x.channelId === c.id) || (ch.listChannels('owned').length === 1 ? accounts.list(p)[0] : null); return [p, a ? a.username || a.accountId : null]; }));
     return { channelId: c.id, title: c.title, handle: c.handle || null, connected: !!c.authorized, subscribers: c.subscriber_count ?? null,
-      instagram: ig ? ig.username || ig.accountId : null, tiktok: tt ? tt.username || tt.accountId : null };
+      instagram: ig ? ig.username || ig.accountId : null, tiktok: tt ? tt.username || tt.accountId : null, ...other };
   });
   const unlinked = { instagram: igs.filter(a => !a.channelId).map(a => a.username || a.accountId), tiktok: tts.filter(a => !a.channelId).map(a => a.username || a.accountId) };
   // With a single brand, unlinked accounts are simply that brand's.

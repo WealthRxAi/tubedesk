@@ -6,7 +6,17 @@ const file = process.env.FAKE_TS_STATE;
 const st = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : { funnel: null, asked: false };
 const save = () => fs.writeFileSync(file, JSON.stringify(st));
 const a = process.argv.slice(2);
-if (a[0] === 'status' && a.includes('--json')) { console.log(JSON.stringify({ BackendState: 'Running', Self: { DNSName: 'salmans-mac-mini.tail1234.ts.net.' } })); process.exit(0); }
+if (a[0] === 'status' && a.includes('--json')) { console.log(JSON.stringify({ BackendState: 'Running', Self: { DNSName: 'salmans-mac-mini.tail1234.ts.net.', UserID: 7 }, User: { 7: { LoginName: 'salman@example.com' } } })); process.exit(0); }
+// tailscale serve (tailnet-only) on :8443 — the phone address; shares the Web map with funnel in `status --json`
+if (a[0] === 'serve' && a.includes('off')) { st.serve8443 = null; save(); process.exit(0); }
+if (a[0] === 'serve' && a.includes('--bg')) { st.serve8443 = a[a.length - 1]; save(); console.log(`Available within your tailnet:\nhttps://salmans-mac-mini.tail1234.ts.net:8443/`); process.exit(0); }
+if ((a[0] === 'serve' || a[0] === 'funnel') && a[1] === 'status') {
+  const Web = {};
+  if (st.funnel) Web['salmans-mac-mini.tail1234.ts.net:443'] = { Handlers: { '/': { Proxy: `http://127.0.0.1:${st.funnel}` } } };
+  if (st.serve8443) Web['salmans-mac-mini.tail1234.ts.net:8443'] = { Handlers: { '/': { Proxy: st.serve8443 } } };
+  console.log(JSON.stringify(Object.keys(Web).length ? { Web, ...(st.funnel ? { TCP: { 443: { HTTPS: true } }, AllowFunnel: { 'salmans-mac-mini.tail1234.ts.net:443': true } } : {}) } : {}));
+  process.exit(0);
+}
 if (a[0] === 'funnel' && a[1] === 'status') {
   console.log(JSON.stringify(st.funnel ? { TCP: { 443: { HTTPS: true } }, Web: { 'salmans-mac-mini.tail1234.ts.net:443': { Handlers: { '/': { Proxy: `http://127.0.0.1:${st.funnel}` } } } }, AllowFunnel: { 'salmans-mac-mini.tail1234.ts.net:443': true } } : {}));
   process.exit(0);

@@ -11,6 +11,7 @@ import crypto from 'node:crypto';
 import { db, getSetting, setSetting } from '../db.js';
 import { ig } from './publish.js';
 import { logApi } from '../youtube/client.js';
+import { fetchRetry } from '../lib/http.js';
 
 const TT = process.env.TT_API_BASE || 'https://open.tiktokapis.com/v2';
 const TT_AUTH = process.env.TT_AUTH_BASE || 'https://www.tiktok.com/v2/auth/authorize/';
@@ -228,7 +229,7 @@ export async function tt(pathname, { method = 'POST', params = {}, json = undefi
   const token = await ttAccess();
   const u = new URL(`${TT}/${pathname}`); for (const [k, v] of Object.entries(params)) if (v != null) u.searchParams.set(k, String(v));
   const t0 = Date.now();
-  const res = await fetch(u, { method, headers: { Authorization: `Bearer ${token}`, ...(json !== undefined ? { 'Content-Type': 'application/json; charset=UTF-8' } : {}) }, body: json !== undefined ? JSON.stringify(json) : undefined });
+  const res = await fetchRetry(u, { method, headers: { Authorization: `Bearer ${token}`, ...(json !== undefined ? { 'Content-Type': 'application/json; charset=UTF-8' } : {}) }, body: json !== undefined ? JSON.stringify(json) : undefined });
   const j = await res.json().catch(() => ({}));
   logApi({ api: 'tiktok', endpoint: pathname, units: 0, cached: 0, ms: Date.now() - t0, ok: res.ok && (!j.error || j.error.code === 'ok') ? 1 : 0 });
   if (!res.ok || (j.error && j.error.code !== 'ok')) throw new Error(`TikTok API: ${j.error?.message || j.error?.code || res.status}`);

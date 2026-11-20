@@ -36,10 +36,14 @@ import * as transcribe from '../services/transcribe.js';
 import * as igwatch from '../services/igwatch.js';
 import { runDailySnapshot } from '../jobs/scheduler.js';
 import { setup } from './setup.js';
+import { readFileSync } from 'node:fs';
+const PKG_VERSION = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version;
+import { growth } from './growth.js';
 import * as accounts from '../services/accounts.js';
 
 export const api = Router();
 api.use(setup); // setup checklist, validated settings, tools/OpenAPI, remote access — and the guard for remote callers
+api.use(growth); // outlier index, formulas, thumbnails, ranks, bulk edits, make-a-video, more platforms, phone
 const w = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 const SECRET_KEYS = ['yt_api_key', 'google_client_secret', 'anthropic_api_key', 'ig_access_token', 'notify_webhook_url', 'notify_ntfy_topic', 'tt_client_secret', 'tt_access_token', 'tt_refresh_token', 'elevenlabs_api_key', 'heygen_api_key', 'higgsfield_api_key', 'higgsfield_api_secret'];
 
@@ -49,7 +53,7 @@ api.get('/status', w(async (req, res) => {
   res.json({
     configured: { apiKey: !!s.yt_api_key, oauth: !!(s.google_client_id && s.google_client_secret) },
     ai: await ai.status(), quota: quotaToday(), channels: ch.listChannels().length,
-    lastSnapshot: s.last_snapshot ? JSON.parse(s.last_snapshot) : null, version: '2.0.0', dataDir: DATA_DIR,
+    lastSnapshot: s.last_snapshot ? JSON.parse(s.last_snapshot) : null, version: PKG_VERSION, dataDir: DATA_DIR,
   });
 }));
 api.get('/settings', (req, res) => {

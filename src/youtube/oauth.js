@@ -1,6 +1,7 @@
 // Google OAuth for owned channels. Tokens are stored per channel in SQLite (local machine only).
 import crypto from 'node:crypto';
 import { db, getSetting } from '../db.js';
+import { fetchRetry } from '../lib/http.js';
 
 export const SCOPES = [
   'https://www.googleapis.com/auth/youtube.readonly',
@@ -45,7 +46,7 @@ async function tokenRequest(form) {
   const clientSecret = getSetting('google_client_secret');
   if (!clientId || !clientSecret) throw new Error('Google OAuth client ID/secret not configured (Settings).');
   const body = new URLSearchParams({ client_id: clientId, client_secret: clientSecret, ...form });
-  const res = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body });
+  const res = await fetchRetry(process.env.GOOGLE_TOKEN_URL || 'https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body }, { idempotent: form.grant_type === 'refresh_token' });
   const json = await res.json();
   if (!res.ok) throw new Error(`Token exchange failed: ${json.error_description || json.error || res.status}`);
   return json;
@@ -58,6 +59,7 @@ export async function exchangeCode(code) {
     refresh_token: tok.refresh_token,
     expires_at: Date.now() + (tok.expires_in || 3600) * 1000 - 60_000,
     scope: tok.scope,
+    connected_at: new Date().toISOString(),
   };
 }
 
@@ -75,6 +77,7 @@ export function getTokens(channelId) {
 }
 export function saveTokens(channelId, tokens) {
   db.prepare('UPDATE channels SET oauth_json = ? WHERE id = ?').run(JSON.stringify(tokens), channelId);
+  if (tokens?.connected_at) db.prepare('DELETE FROM settings WHERE key = ?').run(`oauth_broken_${channelId}`); // a fresh sign-in fixes it
 }
 export function clearTokens(channelId) {
   db.prepare("UPDATE channels SET oauth_json = NULL, oauth_email = NULL WHERE id = ?").run(channelId);
@@ -85,9 +88,22 @@ export async function getAccessToken(channelId) {
   if (!tok) throw new Error(`Channel ${channelId} is not authorized. Connect it with Google in Channels.`);
   if (tok.access_token && tok.expires_at > Date.now()) return tok.access_token;
   if (!tok.refresh_token) throw new Error('No refresh token stored; reconnect the channel.');
-  const fresh = await tokenRequest({ refresh_token: tok.refresh_token, grant_type: 'refresh_token' });
+  let fresh;
+  try { fresh = await tokenRequest({ refresh_token: tok.refresh_token, grant_type: 'refresh_token' }); }
+  catch (e) {
+    // invalid_grant = Google revoked or expired the sign-in (password change, access removed, or an OAuth app still
+    // in "Testing", whose sign-ins expire after 7 days). Recorded so the health check can say exactly what to do.
+    if (/invalid_grant|expired or revoked/i.test(e.message)) {
+      const age = tok.connected_at ? (Date.now() - Date.parse(tok.connected_at)) / 86400000 : null;
+      db.prepare("INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+        .run(`oauth_broken_${channelId}`, JSON.stringify({ at: new Date().toISOString(), error: e.message, ageDays: age && Math.round(age * 10) / 10 }));
+      throw new Error(`Google sign-in for this channel has expired or was revoked — reconnect it (Channels → Connect with Google).${age !== null && age >= 6 && age <= 8 ? ' It lasted about 7 days, which means the Google Cloud OAuth app is still in "Testing": publish it (Google Auth Platform → Audience → Publish app) so sign-ins stop expiring.' : ''}`);
+    }
+    throw e;
+  }
   const next = { ...tok, access_token: fresh.access_token, expires_at: Date.now() + (fresh.expires_in || 3600) * 1000 - 60_000 };
   saveTokens(channelId, next);
+  db.prepare('DELETE FROM settings WHERE key = ?').run(`oauth_broken_${channelId}`);
   return next.access_token;
 }
 

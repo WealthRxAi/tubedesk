@@ -6,7 +6,7 @@ description: >
   "what are competitors doing that's blowing up", or wants ideas for a YouTube channel, Shorts, or Instagram reels,
   using TubeDesk.
 metadata:
-  version: "2.0.0"
+  version: "2.1.0"
 ---
 
 # Video ideas with evidence

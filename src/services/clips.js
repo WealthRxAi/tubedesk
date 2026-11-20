@@ -352,6 +352,7 @@ async function processInner() {
         const late = !q.publish_at || Date.parse(q.publish_at) < Date.now() + 5 * MIN;
         job = pub.publishYouTube({ ...params, ...(late ? { privacy: 'public', publishAt: undefined } : { privacy: 'private', publishAt: q.publish_at }) });
       } else if (q.platform === 'tiktok') job = pub.publishTikTok(params);
+      else if (['threads', 'facebook', 'linkedin'].includes(q.platform)) job = (await import('./social-publish.js')).publish(q.platform, params);
       else job = pub.publishInstagram(params);
       db.prepare('UPDATE publish_queue SET job_id = ? WHERE id = ?').run(job.id, q.id);
       const fin = await pub.waitForJob(job.id, 30 * MIN);

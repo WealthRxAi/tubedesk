@@ -7,7 +7,7 @@ description: >
   "best time to post" — or mentions TubeDesk, vidIQ-style research, the virality radar, or the TubeDesk tools.
   It explains how to drive the user's self-hosted TubeDesk through its MCP tools.
 metadata:
-  version: "2.0.0"
+  version: "2.1.0"
 ---
 
 # Operating TubeDesk
@@ -26,14 +26,14 @@ If a tool returns "TubeDesk isn't running", say so in one line and give the rest
 
 | Need | Tools |
 |---|---|
-| Ideas | `daily_ideas` (radar-scored morning list; `run:true` rebuilds, 1–3 min), `outliers`, `keyword_research`, `similar_channels` |
-| Packaging | `radar_score` (1–8 title/thumbnail variants + optional hook → ranked, predicted × usual views, fixes), `make_thumbnails` |
-| After upload | `radar_watch` (pace vs usual launch curve), `ctr_report` (real impressions/CTR), `autopilot` (fix lagging packaging) |
+| Ideas | `daily_ideas` (radar-scored morning list; `run:true` rebuilds, 1–3 min), `outlier_index` (the user's own outlier database — free), `niche_finder`, `competitor_audience`, `outliers`, `keyword_research`, `similar_channels` |
+| Packaging | `title_formulas` (proven structures in the niche — use before writing titles), `radar_score` (1–8 title/thumbnail variants + optional hook → ranked, predicted × usual views, fixes), `make_thumbnails`, `similar_thumbnails` |
+| After upload | `radar_watch` (pace vs usual launch curve), `ctr_report` (real impressions/CTR), `autopilot` (fix lagging packaging), `rank_tracker` (search positions), `bulk_edit` (many videos at once: preview → apply → undo) |
 | Whole picture | `portfolio` (every owned channel + Instagram, week vs last week) |
-| Production | `voiceover`, `voiceover_short`, `render_video`, `media_transcode`, `media_probe`, `caption_timing`, `speech_segments`, `extract_frame`, `make_shorts` |
-| Publishing | `publish_status`, `best_publish_time`, `publish_youtube`, `publish_instagram`, `publish_tiktok`, `publish_job` |
+| Production | `make_video` (idea → finished, scheduled Short in one call), `find_source_files`, `voiceover`, `voiceover_short`, `render_video`, `media_transcode`, `media_probe`, `caption_timing`, `speech_segments`, `extract_frame`, `make_shorts` |
+| Publishing | `publish_status`, `best_publish_time`, `publish_youtube`, `publish_instagram` (reels, images, carousels, Stories), `publish_tiktok`, `publish_social` (Threads, Facebook Page, LinkedIn), `publish_job` |
 | Instagram / TikTok research | `ig_lookup`, `ig_track_account`, `ig_outliers`, `ig_hashtag`, `tiktok_videos` |
-| Setup & configuration | `setup_status` (checklist + next step), `get_settings`, `update_settings`, `add_channel`, `add_instagram_account`, `link_social_account`, `connect_account`, `test_notification`, `remote_access` — the setup-tubedesk skill walks through all of it |
+| Setup & configuration | `setup_status` (checklist + next step), `get_settings`, `update_settings`, `add_channel`, `add_instagram_account`, `link_social_account`, `add_social_account`, `connect_account`, `test_notification`, `remote_access`, `health` (what needs fixing, with the fix) — the setup-tubedesk skill walks through all of it |
 | Brands | `brands` (every channel + its Instagram/TikTok accounts) |
 | Anything else | `tubedesk_api` (`GET /api/agent` lists every route) |
 

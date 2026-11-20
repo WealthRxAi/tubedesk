@@ -67,7 +67,9 @@ ROUTES = ['/', '/channels', '/library', '/analytics/overview', '/analytics/traff
           '/packaging/title?title=7%20Medicaid%20Rules', '/packaging/description', '/packaging/chapters', '/packaging/thumbnail', '/packaging/translate', '/packaging/health', '/packaging/staged', '/packaging/safety',
           '/coach/chat', '/coach/ideas', '/coach/audit', '/coach/plan', '/coach/validate', '/coach/beginner', '/coach/lessons', '/coach/context',
           '/production/script', '/production/transcript', '/production/clips', '/production/repurpose', '/production/hook', '/comments', '/comments?filter=questions', '/calculators', '/settings',
-          '/portfolio', '/radar/ideas', '/radar/score', '/radar/watch', '/radar/shorts', '/radar/autopilot', '/radar/calibration', '/radar/history', '/radar/method', '/social', '/social/outliers', '/social/hashtags?q=claudecode', '/social/tiktok', '/studio', '/studio/thumbs', '/studio/similar']
+          '/portfolio', '/radar/ideas', '/radar/score', '/radar/watch', '/radar/shorts', '/radar/autopilot', '/radar/calibration', '/radar/history', '/radar/method', '/social', '/social/outliers', '/social/hashtags?q=claudecode', '/social/tiktok', '/studio', '/studio/thumbs', '/studio/similar',
+          '/index', '/index?tab=niches', '/index?tab=formulas', '/index?tab=thumbs', '/ranks', '/bulk', '/make', '/health']
+api('/settings', 'PUT', {'index_reserve': '0'}); api('/index/crawl?wait=1', 'POST', {})
 errors = []
 os.makedirs(os.path.join(ROOT, 'test', 'screenshots'), exist_ok=True)
 with sync_playwright() as p:
@@ -82,6 +84,20 @@ with sync_playwright() as p:
         if '<div' in txt or '<tr' in txt or '<span' in txt: errors.append(f'{r}: escaped markup leak: ' + txt[txt.find('<'):txt.find('<')+80])
         if '[object Object]' in txt or 'undefined' in txt: errors.append(f'{r}: rendering leak: ' + txt[txt.find('undefined') - 60: txt.find('undefined') + 20] if 'undefined' in txt else f'{r}: object leak')
         pg.screenshot(path=os.path.join(ROOT, 'test', 'screenshots', r.strip('/').replace('/', '_').replace('?', '_').replace('=', '-').replace('%20', '_') or 'dashboard') + '.png', full_page=True)
+    # Phone-size screens: the menu folds away and opens on tap; pages fit the width
+    mp = b.new_page(viewport={'width': 390, 'height': 844}, is_mobile=True, has_touch=True)
+    mp.on('pageerror', lambda e: errors.append(f'mobile pageerror {e}'))
+    for r in ['/', '/health', '/index', '/portfolio', '/radar/watch']:
+        mp.goto(base + '/#' + r); mp.wait_for_timeout(900)
+        if mp.is_visible('#nav a'): errors.append(f'mobile {r}: menu should start folded')
+        w = mp.evaluate('document.documentElement.scrollWidth')
+        if w > 400: errors.append(f'mobile {r}: page is {w}px wide (horizontal scroll)')
+        mp.screenshot(path=os.path.join(ROOT, 'test', 'screenshots', 'mobile_' + (r.strip('/').replace('/', '_') or 'dashboard') + '.png'))
+    mp.click('#menu-toggle'); mp.wait_for_timeout(200)
+    if not mp.is_visible('#nav a'): errors.append('mobile: menu does not open')
+    mp.click('#nav a[href="#/health"]'); mp.wait_for_timeout(600)
+    if mp.is_visible('#nav a'): errors.append('mobile: menu should close after picking a page')
+    mp.close()
     # Interactions
     pg.goto(base + '/#/library'); pg.wait_for_timeout(800); print('LIB:', pg.inner_text('#main')[:400]); print('ERRS', errors[-5:]); pg.click('tr.clickable', timeout=5000); pg.wait_for_timeout(800)
     print('DRAWER:', pg.inner_text('#drawer')[:300]); print('ERRS', [e for e in errors if 'TUNNEL' not in e][-5:])

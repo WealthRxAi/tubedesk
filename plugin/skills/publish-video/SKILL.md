@@ -5,7 +5,7 @@ description: >
   "post to Instagram", "post to TikTok", "schedule this video", "post it at the best time", "make a Short from this script",
   "render this", or "add a voiceover", using TubeDesk's render, voiceover and publishing tools on the user's Mac.
 metadata:
-  version: "2.0.0"
+  version: "2.1.0"
 ---
 
 # Producing and publishing

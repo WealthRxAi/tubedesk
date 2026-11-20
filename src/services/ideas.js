@@ -89,6 +89,14 @@ export async function gatherSignals(channelId) {
       });
     } catch { /* comments optional (disabled comments, quota) */ }
   }
+  // 6. What competitors' viewers ask for (questions and requests under their best recent videos).
+  if (getSetting('ideas_competitor_comments', '1') === '1') {
+    try {
+      const { competitorAudience } = await import('./research.js');
+      const a = await competitorAudience(channelId);
+      a.clusters.slice(0, 5).forEach((c, i) => { const ex = c.examples[0]; if (ex) signals.push({ id: 'P' + (i + 1), type: "competitor's viewers ask", text: `"${ex.text.slice(0, 160)}" — under ${ex.competitor}'s "${ex.video}"; ${c.count} similar ask${c.count > 1 ? 's' : ''} about "${c.topic}"` }); });
+    } catch { /* optional */ }
+  }
   const covered = corpus.filter(r => r.own).sort((a, b) => b.ts - a.ts).slice(0, 25).map(r => r.title);
   return { signals, covered };
 }

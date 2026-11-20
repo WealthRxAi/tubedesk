@@ -275,13 +275,63 @@ export async function tunnelStatus() {
   let f = null; try { f = JSON.parse(fs_.out || '{}'); } catch { f = null; }
   const funnelOn = !!(f && f.AllowFunnel && Object.values(f.AllowFunnel).some(Boolean));
   // where each served path forwards to (exact port, so 49500 is not mistaken for 4950)
-  const proxies = Object.values(f?.Web || {}).flatMap(h => Object.values(h?.Handlers || {}).map(x => String(x?.Proxy || x?.Path || x?.Text || 'other')));
+  const proxies = Object.entries(f?.Web || {}).flatMap(([hp, h]) => Object.values(h?.Handlers || {}).map(x => ({ hp, to: String(x?.Proxy || x?.Path || x?.Text || 'other') })));
   const here = new RegExp(`^https?://(127\\.0\\.0\\.1|localhost):${port}(/|$)`);
-  const pointsHere = proxies.some(x => here.test(x));
-  const otherUse = proxies.some(x => !here.test(x)); // the owner serves something else through Tailscale
+  const pointsHere = proxies.some(x => here.test(x.to));
+  // the owner serves something else through Tailscale (TubeDesk's own phone address on :8443 doesn't count)
+  const otherUse = proxies.some(x => !here.test(x.to) && !(x.hp.endsWith(`:${PHONE_PORT}`) && phoneTarget().test(x.to)));
   if (url && funnelOn && pointsHere && publicUrl() !== url) setSetting('remote_public_url', url);
   const on = funnelOn && pointsHere;
   return { ...base, publicUrl: url, state: on ? 'on' : 'off', otherUse, next: on ? null : otherUse ? 'Tailscale Serve/Funnel is already used for something else on this Mac — turning remote access on would replace it.' : 'Turn on remote access.' };
+}
+
+// ---------- TubeDesk on your phone (tailnet only) ----------
+// `tailscale serve` on :8443 makes the full app reachable from your own devices signed into the same Tailscale
+// account — never from the internet. The server only accepts those requests from a tailnet address, carrying the
+// identity Tailscale adds for the owner's login.
+export const PHONE_PORT = 8443;
+const mainPort = () => Number(process.env.PORT || getSetting('port', 4949));
+const phoneTarget = () => new RegExp(`^https?://(127\\.0\\.0\\.1|localhost):${mainPort()}(/|$)`);
+export async function phoneStatus() {
+  const bin = tailscaleBinary();
+  if (!bin) return { state: 'not-installed' };
+  let s = null; try { s = JSON.parse((await run(bin, ['status', '--json'], 8000)).out); } catch { /* */ }
+  if (!s || s.BackendState !== 'Running') return { state: 'signed-out' };
+  const dns = String(s.Self?.DNSName || '').replace(/\.$/, '');
+  const login = s.User?.[s.Self?.UserID]?.LoginName || null;
+  if (login && getSetting('phone_owner_login', '') !== login) setSetting('phone_owner_login', login);
+  if (dns) setSetting('phone_host', `${dns}:${PHONE_PORT}`);
+  let f = {}; try { f = JSON.parse((await run(bin, ['serve', 'status', '--json'], 8000)).out || '{}'); } catch { /* */ }
+  const h = Object.entries(f?.Web || {}).find(([hp]) => hp.endsWith(`:${PHONE_PORT}`));
+  const targets = h ? Object.values(h[1]?.Handlers || {}).map(x => String(x?.Proxy || '')) : [];
+  const on = targets.some(t => phoneTarget().test(t));
+  return { state: on ? 'on' : h ? 'port-in-use' : 'off', url: dns ? `https://${dns}:${PHONE_PORT}` : null, owner: login, next: on ? 'On your phone: install the free Tailscale app, sign in with the same account, then open this address and "Add to Home Screen".' : null };
+}
+export async function enablePhone() {
+  const bin = tailscaleBinary();
+  if (!bin) throw httpErr(400, 'not_installed', 'Tailscale is not installed.');
+  const cur = await phoneStatus();
+  if (cur.state === 'on') return cur;
+  if (cur.state === 'port-in-use') throw httpErr(409, 'port_in_use', `Tailscale Serve already uses port ${PHONE_PORT} for something else on this Mac.`);
+  const r = await run(bin, ['serve', '--bg', `--https=${PHONE_PORT}`, `http://127.0.0.1:${mainPort()}`], 30000);
+  if (r.code !== 0) throw httpErr(400, 'tailscale_error', ((r.out + r.err).trim().split('\n').pop() || 'tailscale serve failed').slice(0, 300));
+  setSetting('phone_off_by_user', '0');
+  return phoneStatus();
+}
+export async function disablePhone() {
+  const bin = tailscaleBinary();
+  if (bin) await run(bin, ['serve', `--https=${PHONE_PORT}`, 'off'], 15000);
+  setSetting('phone_off_by_user', '1');
+  return phoneStatus();
+}
+/** Is this request the owner's phone/laptop over the tailnet (through `tailscale serve`)? */
+export function isOwnerDevice(req) {
+  const login = req.headers['tailscale-user-login'];
+  const owner = getSetting('phone_owner_login', '');
+  if (!login || !owner || login !== owner) return false;
+  const ip = String(req.headers['x-forwarded-for'] || '').split(',').pop().trim();
+  const tailnet = /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d+\.\d+$/.test(ip) || /^fd7a:115c:a1e0:/i.test(ip);
+  return tailnet;
 }
 
 /** Point Tailscale Funnel (https 443) at the public listener. */
@@ -313,6 +363,11 @@ export async function disableFunnel() {
  * unless the owner turned it off. If Tailscale wants Funnel allowed for this Mac, the owner gets that link once by phone.
  */
 export async function autoEnable() {
+  // the phone address is tailnet-only (no approval, nothing public): turn it on whenever Tailscale is signed in
+  if (getSetting('phone_access', '1') === '1' && getSetting('phone_off_by_user', '0') !== '1') {
+    const ph = await phoneStatus().catch(() => null);
+    if (ph?.state === 'off') await enablePhone().then(r => { if (r.state === 'on' && getSetting('phone_link_sent', '') !== r.url) { setSetting('phone_link_sent', r.url); notify({ kind: 'remote_access', force: true, title: 'TubeDesk is on your phone', body: `Install the free Tailscale app on your phone, sign in with the same account, then open ${r.url} and tap Share → Add to Home Screen.`, url: r.url }).catch(() => {}); } }).catch(e => console.error('phone access:', e.message));
+  }
   if (getSetting('remote_auto', '1') === '0' || getSetting('remote_off_by_user', '0') === '1') return { skipped: 'off' };
   const st = await tunnelStatus();
   if (st.state === 'on') { setSetting('remote_seen_on', '1'); return { state: 'on' }; }

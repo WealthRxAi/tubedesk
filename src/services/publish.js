@@ -9,6 +9,7 @@ import { getAccessToken, isAuthorized } from '../youtube/oauth.js';
 import { logApi, quotaToday, ytWrite, YouTubeError } from '../youtube/client.js';
 import * as ch from './channels.js';
 import * as accounts from './accounts.js';
+import { fetchRetry } from '../lib/http.js';
 
 const YT_UPLOAD = process.env.YT_UPLOAD_BASE || 'https://www.googleapis.com/upload/youtube/v3';
 const IG_GRAPH = process.env.IG_GRAPH_BASE || 'https://graph.instagram.com/v21.0';
@@ -53,12 +54,12 @@ function update(id, patch) {
 function logLine(id, line) {
   db.prepare("UPDATE publish_jobs SET log = log || ? || char(10), updated_at = datetime('now') WHERE id = ?").run(`${new Date().toISOString().slice(11, 19)} ${line}`, id);
 }
-function createJob(platform, file, title, params) {
+export function createJob(platform, file, title, params) {
   const id = crypto.randomBytes(6).toString('hex');
   db.prepare('INSERT INTO publish_jobs(id, platform, status, file, title, params_json) VALUES (?, ?, ?, ?, ?, ?)').run(id, platform, 'queued', file, title || null, JSON.stringify(params));
   return id;
 }
-async function runJob(id, fn) {
+export async function runJob(id, fn) {
   update(id, { status: 'running' });
   const p = (async () => {
     try {
@@ -85,7 +86,7 @@ export async function waitForJob(id, timeoutMs = 10 * 60 * 1000) {
 }
 
 // ---------- validation ----------
-function resolveFile(file, kinds) {
+export function resolveFile(file, kinds) {
   if (!file || typeof file !== 'string') throw new Error('file is required: an absolute path on this machine.');
   const abs = path.resolve(file);
   if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) throw new Error(`file not found: ${abs}`);
@@ -230,7 +231,7 @@ export async function ig(pathname, { method = 'GET', params = {}, token: explici
   for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== null && v !== '') u.searchParams.set(k, String(v));
   u.searchParams.set('access_token', token);
   const t0 = Date.now();
-  const res = await fetch(u, { method, signal: AbortSignal.timeout(90_000) });
+  const res = await fetchRetry(u, { method }, { timeoutMs: 90_000 });
   const j = await res.json().catch(() => ({}));
   logApi({ api: 'instagram', endpoint: `${method} ${pathname.replace(/^\d+/, ':id')}`, units: 0, cached: 0, ms: Date.now() - t0, ok: res.ok ? 1 : 0 });
   if (!res.ok || j.error) {
@@ -279,7 +280,7 @@ export async function refreshInstagramToken({ force = false, all = false } = {})
   const last = Date.parse(row.token_refreshed_at || 0) || 0;
   if (!force && Date.now() - last < 30 * 86400e3) return { refreshed: false, reason: 'fresh', account: row.username };
   const u = new URL(IG_REFRESH); u.searchParams.set('grant_type', 'ig_refresh_token'); u.searchParams.set('access_token', row.token);
-  const res = await fetch(u, { signal: AbortSignal.timeout(60_000) }); const j = await res.json().catch(() => ({}));
+  const res = await fetchRetry(u, {}, { timeoutMs: 60_000 }); const j = await res.json().catch(() => ({}));
   if (!res.ok || !j.access_token) return { refreshed: false, reason: j?.error?.message || `status ${res.status}`, account: row.username };
   accounts.updateTokens('instagram', row, { token: j.access_token, tokenRefreshedAt: new Date().toISOString() });
   return { refreshed: true, account: row.username, expiresInDays: Math.round((j.expires_in || 0) / 86400) };
@@ -288,15 +289,22 @@ export async function refreshInstagramToken({ force = false, all = false } = {})
 export function validateInstagram(p = {}) {
   const acct = accounts.resolve('instagram', p.account || null);
   if (!acct?.token) throw new Error(p.account ? `No Instagram account for "${p.account}" — add one (add_instagram_account) or link it to that channel.` : 'Instagram is not configured: add an account (Settings → Social accounts, or the add_instagram_account tool).');
-  const kind = p.kind || 'reel';
-  if (!['reel', 'image'].includes(kind)) throw new Error("kind must be 'reel' or 'image'.");
-  const file = resolveFile(p.file, kind === 'reel' ? VIDEO_EXT : IMAGE_EXT);
-  if (kind === 'reel' && !['.mp4', '.mov', '.m4v'].includes(path.extname(file).toLowerCase())) throw new Error('Reels must be MP4 or MOV (H.264/AAC).');
+  const kind = p.kind || (Array.isArray(p.files) ? 'carousel' : 'reel');
+  if (!['reel', 'image', 'carousel', 'story'].includes(kind)) throw new Error("kind must be 'reel', 'image', 'carousel' or 'story'.");
+  const ANY = new Set([...VIDEO_EXT, ...IMAGE_EXT]);
+  const isVideo = f => VIDEO_EXT.has(path.extname(f).toLowerCase());
+  let files;
+  if (kind === 'carousel') {
+    if (!Array.isArray(p.files) || p.files.length < 2 || p.files.length > 10) throw new Error('A carousel needs 2–10 files (images and/or videos) in files: [...].');
+    files = p.files.map(f => resolveFile(f, ANY));
+  } else files = [resolveFile(p.file, kind === 'reel' ? VIDEO_EXT : kind === 'image' ? IMAGE_EXT : ANY)];
+  const file = files[0];
+  if ((kind === 'reel' || (kind === 'story' && isVideo(file))) && !['.mp4', '.mov', '.m4v'].includes(path.extname(file).toLowerCase())) throw new Error('Reels and video Stories must be MP4 or MOV (H.264/AAC).');
   const caption = String(p.caption || '');
   if (caption.length > 2200) throw new Error('caption must be 2,200 characters or fewer.');
   if ((caption.match(/#/g) || []).length > 30) throw new Error('caption may contain at most 30 hashtags.');
   const cover = p.cover ? resolveFile(p.cover, IMAGE_EXT) : null;
-  return { kind, file, caption, cover, shareToFeed: p.shareToFeed !== false, thumbOffsetMs: p.thumbOffsetMs ? Number(p.thumbOffsetMs) : undefined, locationId: p.locationId || undefined, collaborators: Array.isArray(p.collaborators) ? p.collaborators : undefined, account: acct.account_id, accountName: acct.username || acct.account_id };
+  return { kind, file, files, videoFlags: files.map(isVideo), caption: kind === 'story' ? '' : caption, cover, shareToFeed: p.shareToFeed !== false, thumbOffsetMs: p.thumbOffsetMs ? Number(p.thumbOffsetMs) : undefined, locationId: p.locationId || undefined, collaborators: Array.isArray(p.collaborators) ? p.collaborators : undefined, account: acct.account_id, accountName: acct.username || acct.account_id };
 }
 
 export function publishInstagram(params) {
@@ -307,22 +315,37 @@ export function publishInstagram(params) {
   accounts.withAccount('instagram', row, () => runJob(id, async log => {
     log(`account @${v.accountName}`);
     await refreshInstagramToken().then(r => { if (r.refreshed) log('access token refreshed'); }).catch(() => {});
-    const lease = await publicLease([v.file, v.cover].filter(Boolean), log);
-    try {
-      const params = { caption: v.caption, location_id: v.locationId, collaborators: v.collaborators ? JSON.stringify(v.collaborators) : undefined };
-      if (v.kind === 'reel') Object.assign(params, { media_type: 'REELS', video_url: lease.urls[0], share_to_feed: v.shareToFeed, cover_url: v.cover ? lease.urls[1] : undefined, thumb_offset: v.thumbOffsetMs });
-      else Object.assign(params, { image_url: lease.urls[0] });
-      const c = await ig(`${igUser}/media`, { method: 'POST', params });
-      log(`container ${c.id} created; Instagram is fetching the ${v.kind}`);
+    const files = v.files || [v.file];
+    const lease = await publicLease([...files, v.cover].filter(Boolean), log);
+    const wait = async (cid, video) => {
       const deadline = Date.now() + 15 * 60 * 1000; let status = 'IN_PROGRESS', detail = '';
       while (Date.now() < deadline) {
-        await new Promise(r => setTimeout(r, v.kind === 'reel' ? 6000 : 2000));
-        const s = await ig(c.id, { params: { fields: 'status_code,status' } });
+        await new Promise(r => setTimeout(r, process.env.IG_GRAPH_BASE ? 30 : video ? 6000 : 2000));
+        const s = await ig(cid, { params: { fields: 'status_code,status' } });
         status = s.status_code; detail = s.status || '';
-        if (status === 'FINISHED') break;
+        if (status === 'FINISHED') return;
         if (status === 'ERROR' || status === 'EXPIRED') throw new Error(`Instagram could not process the media: ${detail || status}`);
       }
-      if (status !== 'FINISHED') throw new Error('Instagram processing timed out after 15 minutes.');
+      throw new Error('Instagram processing timed out after 15 minutes.');
+    };
+    try {
+      const params = { caption: v.caption || undefined, location_id: v.locationId, collaborators: v.collaborators ? JSON.stringify(v.collaborators) : undefined };
+      const media = (url, video) => video ? { media_type: 'VIDEO', video_url: url } : { image_url: url };
+      if (v.kind === 'reel') Object.assign(params, { media_type: 'REELS', video_url: lease.urls[0], share_to_feed: v.shareToFeed, cover_url: v.cover ? lease.urls[files.length] : undefined, thumb_offset: v.thumbOffsetMs });
+      else if (v.kind === 'story') Object.assign(params, { media_type: 'STORIES', ...(v.videoFlags[0] ? { video_url: lease.urls[0] } : { image_url: lease.urls[0] }) });
+      else if (v.kind === 'carousel') {
+        const children = [];
+        for (let i = 0; i < files.length; i++) {
+          const ch = await ig(`${igUser}/media`, { method: 'POST', params: { is_carousel_item: true, ...media(lease.urls[i], v.videoFlags[i]) } });
+          await wait(ch.id, v.videoFlags[i]);
+          children.push(ch.id);
+        }
+        log(`${children.length} carousel items uploaded`);
+        Object.assign(params, { media_type: 'CAROUSEL', children: children.join(',') });
+      } else Object.assign(params, { image_url: lease.urls[0] });
+      const c = await ig(`${igUser}/media`, { method: 'POST', params });
+      log(`container ${c.id} created; Instagram is fetching the ${v.kind}`);
+      await wait(c.id, v.kind === 'reel' || v.videoFlags.some(Boolean));
       const pub = await ig(`${igUser}/media_publish`, { method: 'POST', params: { creation_id: c.id } });
       log(`published media ${pub.id}`);
       let url = null;

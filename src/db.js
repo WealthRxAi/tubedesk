@@ -8,6 +8,28 @@ const DATA_DIR = process.env.TUBEDESK_DATA_DIR || path.join(__dirname, '..', 'da
 fs.mkdirSync(DATA_DIR, { recursive: true });
 const DB_PATH = process.env.TUBEDESK_DB || path.join(DATA_DIR, 'tubedesk.sqlite');
 
+// A restore chosen in Settings is applied here, before the database is opened: the current file is kept as a
+// backup, then the chosen backup takes its place.
+(function applyPendingRestore() {
+  const flag = path.join(DATA_DIR, 'restore-pending.json');
+  if (!fs.existsSync(flag)) return;
+  try {
+    const { file } = JSON.parse(fs.readFileSync(flag, 'utf8'));
+    if (file && fs.existsSync(file)) {
+      const keep = path.join(DATA_DIR, 'backups', `tubedesk-${new Date().toISOString().slice(0, 10)}-${new Date().toTimeString().slice(0, 8).replace(/:/g, '')}.sqlite`);
+      fs.mkdirSync(path.dirname(keep), { recursive: true });
+      if (fs.existsSync(DB_PATH)) {
+        const cur = new Database(DB_PATH); cur.pragma('wal_checkpoint(TRUNCATE)'); cur.close(); // fold the WAL in first
+        fs.copyFileSync(DB_PATH, keep);
+      }
+      for (const ext of ['-wal', '-shm']) fs.rmSync(DB_PATH + ext, { force: true });
+      fs.copyFileSync(file, DB_PATH);
+      console.log(`[restore] restored ${path.basename(file)} (previous data kept as ${path.basename(keep)})`);
+    }
+  } catch (e) { console.error('[restore] failed, keeping the current database:', e.message); }
+  fs.rmSync(flag, { force: true });
+})();
+
 export const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');

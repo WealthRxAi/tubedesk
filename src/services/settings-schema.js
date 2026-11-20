@@ -110,6 +110,18 @@ export const SCHEMA = [
   S('tailscale_path', 'system', 'path', 'Path to the tailscale CLI (blank = auto-detect).', { local: true }),
   S('ai_autoconnect', 'system', 'bool', 'Connect TubeDesk to every AI app on this Mac (Claude, Claude Code, Codex, Cursor, Gemini, Copilot, Windsurf, LM Studio) at every start.', { local: true, default: '1' }),
   S('remote_auto', 'system', 'bool', 'Turn remote access on by itself once Tailscale is signed in.', { local: true, default: '1' }),
+  S('auto_update', 'system', 'bool', 'Install new TubeDesk versions from GitHub by itself (fast-forward only, never over local edits; rolls back if the new version fails to start).', { local: true, default: '1' }),
+  S('update_cron', 'schedule', 'cron', 'When to check for and install updates.', { default: '10 4 * * *' }),
+  S('backup_cron', 'schedule', 'cron', 'Nightly database backup and housekeeping (7 daily + 8 weekly backups kept).', { default: '30 3 * * *' }),
+  S('doctor_cron', 'schedule', 'cron', 'Morning check-up; problems are texted once a day.', { default: '20 8 * * *' }),
+  S('index_enabled', 'research', 'bool', 'Grow the outlier index every morning from spare YouTube quota.', { default: '1' }),
+  S('index_daily_units', 'research', 'number', 'Quota units the outlier index may spend per day (102 per topic searched).', { default: '1500', min: 0, max: 50000 }),
+  S('index_reserve', 'research', 'number', 'Quota units always left free for everything else before the index crawls.', { default: '3000', min: 0, max: 100000 }),
+  S('index_seeds', 'research', 'string', 'Extra topics for the outlier index, comma-separated (your channels\' topics are added automatically).'),
+  S('rank_max_keywords', 'research', 'number', 'Most keywords the rank tracker checks daily (100 units each).', { default: '15', min: 0, max: 200 }),
+  S('media_dirs', 'research', 'string', 'Folders searched for your uploads\' source files (default: Movies, Downloads, Desktop, Documents).', { local: true }),
+  S('phone_access', 'system', 'bool', 'Serve TubeDesk privately to your own devices on your Tailscale network (your phone).', { local: true, default: '1' }),
+  S('jobs_catchup_minutes', 'schedule', 'number', 'How often missed or failed scheduled jobs are retried.', { default: '10', min: 5, max: 120 }),
 ];
 export const BY_KEY = Object.fromEntries(SCHEMA.map(s => [s.key, s]));
 export const SECRET = new Set(SCHEMA.filter(s => s.type === 'secret').map(s => s.key));
