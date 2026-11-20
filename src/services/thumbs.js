@@ -7,6 +7,7 @@ import { db, getSetting, DATA_DIR } from '../db.js';
 import { frame, probe, fonts, toolStatus } from './render.js';
 import * as pack from './packaging.js';
 import { spawn } from 'node:child_process';
+import { fetchRetry } from '../lib/http.js';
 
 const THUMB_DIR = path.join(DATA_DIR, 'thumbs', 'maker'); // inside data/thumbs so the critic and thumbnails.set accept the files
 const HF_BASE = () => process.env.HF_API_BASE || 'https://platform.higgsfield.ai';
@@ -90,13 +91,13 @@ export async function hfImage({ prompt, aspect = '16:9', model = 'soul', output,
   const t0 = Date.now(); let url = null;
   while (Date.now() - t0 < timeoutMs) {
     await new Promise(r => setTimeout(r, process.env.HF_API_BASE ? 50 : 4000));
-    const st = await fetch(`${HF_BASE()}/v1/requests/${id}`, { headers }).then(r => r.json()).catch(() => ({}));
+    const st = await fetchRetry(`${HF_BASE()}/v1/requests/${id}`, { headers }).then(r => r.json()).catch(() => ({}));
     const status = (st.status || '').toLowerCase();
     if (['completed', 'succeeded', 'success'].includes(status)) { url = st.images?.[0]?.url || st.output?.[0]?.url || st.result?.url; break; }
     if (['failed', 'nsfw', 'cancelled', 'error'].includes(status)) throw new Error(`Higgsfield ${status}: ${st.error || ''}`);
   }
   if (!url) throw new Error('Higgsfield timed out');
-  const buf = Buffer.from(await (await fetch(url)).arrayBuffer());
+  const buf = Buffer.from(await (await fetchRetry(url, {}, { timeoutMs: 120_000 })).arrayBuffer());
   const out = output ? path.resolve(output) : path.join(THUMB_DIR, 'ai', `hf-${id}.jpg`);
   fs.mkdirSync(path.dirname(out), { recursive: true }); fs.writeFileSync(out, buf);
   return { file: out, id, url };

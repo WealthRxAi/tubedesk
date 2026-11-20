@@ -18,7 +18,7 @@ function vid(chId, i) {
   return { id, channelId: chId, title: titles[i % titles.length] + (i >= titles.length ? ` (part ${Math.floor(i / titles.length) + 1})` : ''), short, views, likes: Math.round(views * 0.04), comments: Math.round(views * 0.004), pub, duration: short ? 'PT48S' : `PT${8 + (i % 6)}M${12 + i}S` };
 }
 function videoResource(v) {
-  return { id: v.id, snippet: { publishedAt: v.pub, channelId: v.channelId, channelTitle: CH[v.channelId].title, title: TITLE_OVERRIDES[v.id] || v.title, description: `About ${v.title}.\n\n0:00 Intro\n1:10 The rule\n4:00 Example\n\nhttps://example.org/source`, tags: ['medicaid', 'aging parents', 'caregiving'], categoryId: '27', defaultLanguage: 'en', liveBroadcastContent: 'none', thumbnails: { high: { url: `${THUMB_BASE}/vi/${v.id}/hqdefault.jpg` }, maxres: { url: `${THUMB_BASE}/vi/${v.id}/maxresdefault.jpg` } } }, statistics: { viewCount: String(v.views), likeCount: String(v.likes), commentCount: String(v.comments) }, contentDetails: { duration: v.duration }, status: { privacyStatus: 'public', selfDeclaredMadeForKids: false } };
+  return { id: v.id, snippet: { publishedAt: v.pub, channelId: v.channelId, channelTitle: CH[v.channelId].title, title: TITLE_OVERRIDES[v.id] || v.title, description: SNIPPET_OVERRIDES[v.id]?.description ?? `About ${v.title}.\n\n0:00 Intro\n1:10 The rule\n4:00 Example\n\nhttps://example.org/source`, tags: SNIPPET_OVERRIDES[v.id]?.tags ?? ['medicaid', 'aging parents', 'caregiving'], categoryId: '27', defaultLanguage: 'en', liveBroadcastContent: 'none', thumbnails: { high: { url: `${THUMB_BASE}/vi/${v.id}/hqdefault.jpg` }, maxres: { url: `${THUMB_BASE}/vi/${v.id}/maxresdefault.jpg` } } }, statistics: { viewCount: String(v.views), likeCount: String(v.likes), commentCount: String(v.comments) }, contentDetails: { duration: v.duration }, status: { privacyStatus: 'public', selfDeclaredMadeForKids: false } };
 }
 function channelResource(c) {
   return { id: c.id, snippet: { title: c.title, customUrl: c.handle, description: `${c.title} — money and legal help for families caring for aging parents.`, country: c.country, publishedAt: '2025-06-01T00:00:00Z', thumbnails: { high: { url: `https://yt3.ggpht.com/${c.id}=s240` } } }, statistics: { subscriberCount: String(c.subs), viewCount: String(c.views), videoCount: String(c.videos) }, contentDetails: { relatedPlaylists: { uploads: 'UU' + c.id.slice(2) } }, brandingSettings: { channel: { country: c.country } } };
@@ -28,11 +28,13 @@ export const calls = [];
 export const UPLOADED = { n: 0 };
 // Reporting API state: tests can change how many daily reports exist and the CTR each video gets.
 // Title changes made through videos.update persist, like on YouTube (tests can also set them to simulate the owner).
+export const SNIPPET_OVERRIDES = {};
 export const TITLE_OVERRIDES = {};
 const ptDay = ms => new Date(ms).toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
 // Instagram reels: older ones form the baseline; tests add a fresh one to trigger a breakout.
 export const IG = { media: [{ id: 'IGR0000', caption: 'Reel 0: the form that saves $40K', ageH: 20, views: 1900 },
   ...Array.from({ length: 12 }, (_, i) => ({ id: 'IGR' + String(i + 1).padStart(4, '0'), caption: `Reel ${i + 1}: caregiving money tip`, ageH: 24 * (8 + i * 5), views: 2000 + ((i * 733) % 1500) }))] };
+export const IMG = { forId: null }; // tests can serve real thumbnails per video id
 export const EL = { mp3: Buffer.from([0xff, 0xfb, 0x90, 0x00, 0, 0, 0, 0]) }; // tests swap in a real MP3 when ffmpeg is present
 export const REPORTING = { jobs: [], days: 40, ctr: (i) => (i % 5 === 0 ? 8.5 : i === 1 ? 1.6 : 4.2) };
 // Video thumbnails are served by the mock itself so tests never touch the network.
@@ -90,7 +92,7 @@ export function startMock(port = 0) {
       return json({ detail: 'unknown ' + p }, 404);
     }
     if (u.pathname === '/hf-image.jpg') { res.writeHead(200, { 'content-type': 'image/png' }); return res.end(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64')); }
-    if (u.pathname.startsWith('/vi/')) { res.writeHead(200, { 'content-type': 'image/jpeg' }); return res.end(JPEG); }
+    if (u.pathname.startsWith('/vi/')) { res.writeHead(200, { 'content-type': 'image/jpeg' }); return res.end(IMG.forId ? IMG.forId(u.pathname.split('/')[2]) : JPEG); }
     // --- YouTube Reporting API (reach reports: impressions + CTR) ---
     if (u.pathname.startsWith('/reporting/')) {
       if (!req.headers.authorization) return json({ error: { message: 'Login Required' } }, 401);
@@ -205,7 +207,7 @@ export function startMock(port = 0) {
       return json({ items, nextPageToken: (page + 1) * 50 < n ? String(page + 1) : undefined });
     }
     if (u.pathname.endsWith('/videos')) {
-      if (req.method === 'PUT') { let b = ''; req.on('data', d => b += d); return req.on('end', () => { const j = JSON.parse(b); calls.at(-1).body = j; if (j.snippet?.title) TITLE_OVERRIDES[j.id] = j.snippet.title; if (j.status && UPLOADED[j.id]) UPLOADED[j.id] = { ...j.status, uploadStatus: 'processed' }; json(j); }); }
+      if (req.method === 'PUT') { let b = ''; req.on('data', d => b += d); return req.on('end', () => { const j = JSON.parse(b); calls.at(-1).body = j; if (j.snippet?.title) TITLE_OVERRIDES[j.id] = j.snippet.title; if (j.snippet) SNIPPET_OVERRIDES[j.id] = { description: j.snippet.description, tags: j.snippet.tags }; if (j.status && UPLOADED[j.id]) UPLOADED[j.id] = { ...j.status, uploadStatus: 'processed' }; json(j); }); }
       if (q.id && UPLOADED[q.id]) return json({ items: [{ id: q.id, status: UPLOADED[q.id] }] });
       if (q.chart) { const items = []; for (let i = 0; i < 20; i++) items.push(videoResource(vid('UCcomp000000000000000002', i))); return json({ items }); }
       const ids = q.id.split(','); const items = [];

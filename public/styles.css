@@ -208,3 +208,21 @@ details summary{cursor:pointer}
 
 code.copy{cursor:pointer}
 code.copy:hover{outline:1px solid var(--accent)}
+
+/* ---------- phone & small screens ---------- */
+.menu-toggle{display:none;margin-left:auto;background:none;border:1px solid var(--line2);color:var(--fg);border-radius:8px;font-size:18px;line-height:1;padding:6px 10px;cursor:pointer}
+@media(max-width:800px){
+  #app{display:block}
+  #sidebar{position:sticky;top:0;z-index:30;height:auto;max-height:100vh;padding:10px 12px calc(10px + env(safe-area-inset-top,0)) ;padding-top:calc(10px + env(safe-area-inset-top,0));border-right:0;border-bottom:1px solid var(--line);gap:8px}
+  #sidebar .brand{display:flex;align-items:center;gap:8px}
+  .menu-toggle{display:block}
+  #sidebar #nav,#sidebar .side-foot{display:none}
+  #sidebar.open #nav,#sidebar.open .side-foot{display:block}
+  #sidebar.open{overflow:auto}
+  #main{padding:14px 12px calc(40px + env(safe-area-inset-bottom,0))}
+  #main table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%}
+  #main pre,#main code{white-space:pre-wrap;word-break:break-word}
+  .drawer-inner{width:100% !important;max-width:100% !important}
+  input,select,textarea,button{font-size:16px} /* no zoom-on-focus on iPhone */
+  .btn{min-height:40px}
+}

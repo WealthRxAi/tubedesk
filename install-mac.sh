@@ -13,10 +13,11 @@ cat > "$PLIST" <<EOF
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>Label</key><string>com.tubedesk</string>
-  <key>ProgramArguments</key><array><string>$NODE</string><string>$DIR/src/server.js</string></array>
+  <key>ProgramArguments</key><array><string>$NODE</string><string>$DIR/src/boot.js</string></array>
   <key>WorkingDirectory</key><string>$DIR</string>
   <key>EnvironmentVariables</key><dict>
     <key>PORT</key><string>$PORT</string>
+    <key>TUBEDESK_SUPERVISED</key><string>1</string>
     <key>PATH</key><string>$(dirname "$NODE"):/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
     <key>HOME</key><string>$HOME</string>
   </dict>

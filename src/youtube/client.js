@@ -1,8 +1,27 @@
 // YouTube Data API v3 client with transparent caching and a quota ledger.
 // Every call is logged to api_log so the Settings page can show real quota use.
 import crypto from 'node:crypto';
-import { db, getSetting, today } from '../db.js';
+import { db, getSetting, setSetting } from '../db.js';
 import { getAccessToken } from './oauth.js';
+import { fetchRetry } from '../lib/http.js';
+
+// YouTube's daily quota resets at midnight Pacific, so the ledger counts Pacific days (not UTC, not local).
+const PT = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+const ptParts = d => Object.fromEntries(PT.formatToParts(d).map(x => [x.type, x.value]));
+export function quotaDay(d = new Date()) { const p = ptParts(d); return `${p.year}-${p.month}-${p.day}`; }
+/** Milliseconds until the next Pacific midnight (when YouTube resets the quota) — computed, not searched. */
+export function msUntilQuotaReset(now = new Date()) {
+  const p = ptParts(now);
+  const target = Date.UTC(+p.year, +p.month - 1, +p.day + 1, 0, 0); // next midnight as if UTC
+  let t = target;
+  for (let i = 0; i < 3; i++) { const q = ptParts(new Date(t)); t += target - Date.UTC(+q.year, +q.month - 1, +q.day, +q.hour, +q.minute); }
+  return Math.max(0, t - now.getTime());
+}
+const QUOTA_REASONS = new Set(['quotaExceeded', 'dailyLimitExceeded']);
+const RATE_REASONS = new Set(['rateLimitExceeded', 'userRateLimitExceeded', 'backendError']);
+const reasonOf = body => body?.error?.errors?.[0]?.reason || body?.error?.status || 'error';
+// a 403 that is really "slow down" (not "no more quota today") is worth retrying
+const retryable403 = async res => res.status === 403 && RATE_REASONS.has(reasonOf(await res.json().catch(() => ({}))));
 
 const BASE = process.env.YT_API_BASE || 'https://www.googleapis.com/youtube/v3';
 const SUGGEST_URL = process.env.YT_SUGGEST_URL || 'https://suggestqueries.google.com/complete/search';
@@ -72,13 +91,15 @@ export function cacheClear(prefix = '') {
 
 export function logApi({ api, endpoint, units, cached, ms, ok = 1 }) {
   db.prepare('INSERT INTO api_log(day, api, endpoint, units, cached, ms, ok) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .run(today(), api, endpoint, units, cached ? 1 : 0, ms || 0, ok ? 1 : 0);
+    .run(quotaDay(), api, endpoint, units, cached ? 1 : 0, ms || 0, ok ? 1 : 0);
 }
 
 export function quotaToday() {
-  const row = db.prepare("SELECT COALESCE(SUM(units),0) AS units, COUNT(*) AS calls, SUM(cached) AS cached FROM api_log WHERE day = ? AND api = 'data'").get(today());
+  const day = quotaDay();
+  const row = db.prepare("SELECT COALESCE(SUM(units),0) AS units, COUNT(*) AS calls, SUM(cached) AS cached FROM api_log WHERE day = ? AND api = 'data'").get(day);
   const limit = Number(getSetting('yt_quota_limit', 10000));
-  return { day: today(), units: row.units, calls: row.calls, cached: row.cached || 0, limit, remaining: Math.max(0, limit - row.units) };
+  const exhausted = getSetting('yt_quota_exhausted', '') === day; // Google said "no more today" (other apps on the same project count too)
+  return { day, units: row.units, calls: row.calls, cached: row.cached || 0, limit, remaining: exhausted ? 0 : Math.max(0, limit - row.units), exhausted, resetsInMinutes: Math.round(msUntilQuotaReset() / 60000) };
 }
 
 export function quotaHistory(days = 14) {
@@ -86,9 +107,11 @@ export function quotaHistory(days = 14) {
     FROM api_log WHERE api = 'data' GROUP BY day ORDER BY day DESC LIMIT ?`).all(days);
 }
 
-function assertQuota(units) {
+function assertQuota(units, { essential = false } = {}) {
   const q = quotaToday();
-  const reserve = Number(getSetting('yt_quota_reserve', 500));
+  if (q.exhausted) throw new YouTubeError(`YouTube says today's API quota is used up. It resets at midnight Pacific (in about ${Math.ceil(q.resetsInMinutes / 60)} h); scheduled work picks up again then.`, { status: 429, reason: 'quotaGuard' });
+  // the reserve is kept for essential calls (scheduled uploads, autopilot reverts), so research can't starve them
+  const reserve = essential ? 0 : Number(getSetting('yt_quota_reserve', 500));
   if (q.units + units > q.limit - reserve) {
     throw new YouTubeError(`Daily YouTube API quota guard: ${q.units}/${q.limit} units used today; this call needs ${units}. Resets at midnight Pacific. Raise the limit in Settings if your project has a higher quota.`, { status: 429, reason: 'quotaGuard' });
   }
@@ -100,7 +123,7 @@ function assertQuota(units) {
  *  - channelId: when set, the request is authorized with that owned channel's OAuth token
  *    (required for mine=true, analytics, and private data). Otherwise the API key is used.
  */
-export async function ytGet(endpoint, params = {}, { ttl = 3600, channelId = null, noCache = false } = {}) {
+export async function ytGet(endpoint, params = {}, { ttl = 3600, channelId = null, noCache = false, essential = false } = {}) {
   const [resource] = endpoint.split('.');
   const units = COST[endpoint] ?? 1;
   const key = cacheKey(endpoint, params, channelId);
@@ -108,7 +131,7 @@ export async function ytGet(endpoint, params = {}, { ttl = 3600, channelId = nul
     const hit = cacheGet(key);
     if (hit) { logApi({ api: 'data', endpoint, units: 0, cached: 1 }); return hit; }
   }
-  assertQuota(units);
+  assertQuota(units, { essential });
   const url = new URL(`${BASE}/${resource}`);
   for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, String(v));
   const headers = { Accept: 'application/json' };
@@ -120,12 +143,13 @@ export async function ytGet(endpoint, params = {}, { ttl = 3600, channelId = nul
     url.searchParams.set('key', apiKey);
   }
   const t0 = Date.now();
-  const res = await fetch(url, { headers });
+  const res = await fetchRetry(url, { headers }, { retryStatus: retryable403 });
   const ms = Date.now() - t0;
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {
     logApi({ api: 'data', endpoint, units, cached: 0, ms, ok: 0 });
-    const reason = body?.error?.errors?.[0]?.reason || body?.error?.status || 'error';
+    const reason = reasonOf(body);
+    if (QUOTA_REASONS.has(reason)) setSetting('yt_quota_exhausted', quotaDay());
     throw new YouTubeError(body?.error?.message || `YouTube API error ${res.status}`, { status: res.status, reason, endpoint });
   }
   logApi({ api: 'data', endpoint, units, cached: 0, ms });
@@ -134,11 +158,13 @@ export async function ytGet(endpoint, params = {}, { ttl = 3600, channelId = nul
 }
 
 /** Authenticated write (POST/PUT) on behalf of an owned channel. Never cached. */
-export async function ytWrite(endpoint, { method = 'POST', params = {}, json = null, channelId, rawBody = null, contentType = null }) {
+// Writes that are safe to repeat (setting the same metadata or thumbnail twice changes nothing).
+const IDEMPOTENT_WRITES = new Set(['videos.update', 'thumbnails.set', 'playlists.update']);
+export async function ytWrite(endpoint, { method = 'POST', params = {}, json = null, channelId, rawBody = null, contentType = null, essential = false }) {
   if (!channelId) throw new YouTubeError('Write operations need an owned, authorized channel.', { status: 401 });
   const [resource] = endpoint.split('.');
   const units = COST[endpoint] ?? 50;
-  assertQuota(units);
+  assertQuota(units, { essential });
   const url = new URL(`${BASE}/${resource}`);
   for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, String(v));
   const headers = { Authorization: `Bearer ${await getAccessToken(channelId)}`, Accept: 'application/json' };
@@ -146,12 +172,14 @@ export async function ytWrite(endpoint, { method = 'POST', params = {}, json = n
   if (rawBody) { headers['Content-Type'] = contentType || 'application/octet-stream'; body = rawBody; }
   else if (json) { headers['Content-Type'] = 'application/json'; body = JSON.stringify(json); }
   const t0 = Date.now();
-  const res = await fetch(url, { method, headers, body, signal: AbortSignal.timeout(90_000) });
+  const res = await fetchRetry(url, { method, headers, body }, { timeoutMs: 90_000, idempotent: IDEMPOTENT_WRITES.has(endpoint), retryStatus: retryable403 });
   const ms = Date.now() - t0;
   const out = await res.json().catch(() => ({}));
   if (!res.ok) {
     logApi({ api: 'data', endpoint, units, cached: 0, ms, ok: 0 });
-    throw new YouTubeError(out?.error?.message || `YouTube API error ${res.status}`, { status: res.status, reason: out?.error?.errors?.[0]?.reason, endpoint });
+    const reason = reasonOf(out);
+    if (QUOTA_REASONS.has(reason)) setSetting('yt_quota_exhausted', quotaDay());
+    throw new YouTubeError(out?.error?.message || `YouTube API error ${res.status}`, { status: res.status, reason, endpoint });
   }
   logApi({ api: 'data', endpoint, units, cached: 0, ms });
   return out;
@@ -170,7 +198,7 @@ export async function suggest(query, { country = 'US', lang = 'en' } = {}) {
   url.searchParams.set('q', query);
   const t0 = Date.now();
   try {
-    const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+    const res = await fetchRetry(url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, { retries: 2, timeoutMs: 10_000 });
     const text = await res.text();
     const parsed = JSON.parse(text);
     const list = Array.isArray(parsed?.[1]) ? parsed[1].map(x => Array.isArray(x) ? x[0] : x).filter(Boolean) : [];

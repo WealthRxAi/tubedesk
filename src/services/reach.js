@@ -8,6 +8,7 @@ import { getAccessToken, isAuthorized } from '../youtube/oauth.js';
 import { listChannels } from './channels.js';
 import { parseCsv } from './misc.js';
 import { median } from './stats.js';
+import { fetchRetry } from '../lib/http.js';
 
 const BASE = () => process.env.YT_REPORTING_BASE || 'https://youtubereporting.googleapis.com/v1';
 export const REPORT_TYPE = 'channel_reach_basic_a1';
@@ -37,7 +38,7 @@ function saveState(channelId, s) { setSetting(`reach_state_${channelId}`, JSON.s
 async function call(channelId, pathOrUrl, { method = 'GET', json } = {}) {
   const token = await getAccessToken(channelId);
   const url = /^https?:/.test(pathOrUrl) ? pathOrUrl : BASE() + pathOrUrl;
-  const res = await fetch(url, { method, signal: AbortSignal.timeout(60_000), headers: { Authorization: `Bearer ${token}`, ...(json ? { 'content-type': 'application/json' } : {}) }, body: json ? JSON.stringify(json) : undefined });
+  const res = await fetchRetry(url, { method, headers: { Authorization: `Bearer ${token}`, ...(json ? { 'content-type': 'application/json' } : {}) }, body: json ? JSON.stringify(json) : undefined }, { timeoutMs: 60_000 });
   const text = await res.text();
   if (!res.ok) {
     let msg = text.slice(0, 300);

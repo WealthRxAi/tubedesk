@@ -110,14 +110,22 @@ window.TD = (() => {
     { group: 'Desk' },
     { path: '/', label: 'Dashboard' }, { path: '/portfolio', label: 'All channels' }, { path: '/channels', label: 'Channels' }, { path: '/library', label: 'Video library' }, { path: '/analytics', label: 'Analytics', owned: true },
     { group: 'Research' },
-    { path: '/keywords', label: 'Keywords' }, { path: '/outliers', label: 'Outliers' }, { path: '/trending', label: 'Trending & niches' }, { path: '/competitors', label: 'Competitors' }, { path: '/social', label: 'Instagram & TikTok' }, { path: '/boards', label: 'Boards & blueprints' },
+    { path: '/keywords', label: 'Keywords' }, { path: '/outliers', label: 'Outliers' }, { path: '/index', label: 'Outlier index' }, { path: '/ranks', label: 'Rank tracker', owned: true }, { path: '/trending', label: 'Trending & niches' }, { path: '/competitors', label: 'Competitors' }, { path: '/social', label: 'Instagram & TikTok' }, { path: '/boards', label: 'Boards & blueprints' },
     { group: 'Create' },
-    { path: '/radar', label: 'Virality radar' }, { path: '/packaging', label: 'Packaging' }, { path: '/coach', label: 'AI coach' }, { path: '/production', label: 'Production' }, { path: '/studio', label: 'Studio' }, { path: '/comments', label: 'Comments' },
+    { path: '/radar', label: 'Virality radar' }, { path: '/make', label: 'Make a video', owned: true }, { path: '/bulk', label: 'Bulk editor', owned: true }, { path: '/packaging', label: 'Packaging' }, { path: '/coach', label: 'AI coach' }, { path: '/production', label: 'Production' }, { path: '/studio', label: 'Studio' }, { path: '/comments', label: 'Comments' },
     { group: 'System' },
-    { path: '/calculators', label: 'Calculators' }, { path: '/settings', label: 'Settings' },
+    { path: '/calculators', label: 'Calculators' }, { path: '/health', label: 'Health' }, { path: '/settings', label: 'Settings' },
   ];
   function parseHash() { const hs = location.hash.replace(/^#/, '') || '/'; const [path, qs] = hs.split('?'); const query = Object.fromEntries(new URLSearchParams(qs || '')); return { path: path || '/', query }; }
   function go(path, query = {}) { const qs = new URLSearchParams(query).toString(); location.hash = path + (qs ? '?' + qs : ''); }
+  // phone: the menu folds away; it closes after picking a page
+  (function menu() {
+    const t = document.getElementById('menu-toggle'), sb = document.getElementById('sidebar');
+    if (!t || !sb) return;
+    t.onclick = () => { const open = sb.classList.toggle('open'); t.setAttribute('aria-expanded', open); };
+    window.addEventListener('hashchange', () => { sb.classList.remove('open'); t.setAttribute('aria-expanded', 'false'); });
+  })();
+  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) navigator.serviceWorker.register('/sw.js').catch(() => {});
   function renderNav() {
     const nav = document.getElementById('nav');
     nav.innerHTML = NAV.map(n => n.group ? `<div class="group">${n.group}</div>` : `<a href="#${n.path}" class="${state.route.path === n.path || (n.path !== '/' && state.route.path.startsWith(n.path + '/')) ? 'active' : ''}">${n.label}${n.path === '/competitors' && state.alertCount ? `<span class="badge bad">${state.alertCount}</span>` : ''}</a>`).join('');

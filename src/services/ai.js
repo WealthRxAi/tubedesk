@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { db, getSetting, DATA_DIR } from '../db.js';
+import { fetchRetry } from '../lib/http.js';
 
 export class AIError extends Error { constructor(m) { super(m); this.name = 'AIError'; } }
 
@@ -60,11 +61,11 @@ async function runAnthropicApi(prompt, { imagePath, imagePaths = [], system } = 
     content.push({ type: 'image', source: { type: 'base64', media_type: mt, data } });
   });
   content.push({ type: 'text', text: prompt });
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
+  const res = await fetchRetry('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
     body: JSON.stringify({ model, max_tokens: 4096, system: system || undefined, messages: [{ role: 'user', content }] }),
-  });
+  }, { idempotent: true, timeoutMs: 180_000, retries: 2 }); // re-asking is harmless; 529 overloaded is retried too
   const j = await res.json();
   if (!res.ok) throw new AIError(j?.error?.message || `Anthropic API ${res.status}`);
   return (j.content || []).filter(c => c.type === 'text').map(c => c.text).join('\n').trim();

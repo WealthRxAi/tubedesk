@@ -7,6 +7,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { db, getSetting, DATA_DIR } from '../db.js';
 import { groupWords as _groupWords } from './render.js';
+import { fetchRetry } from '../lib/http.js';
 // render.js groups words shaped {w, line, start, end}; ElevenLabs words are {word,start,end}, so adapt and trim the trailing pad.
 const groupWords = (words, o) => _groupWords(words.map(w => ({ w: w.word, line: 0, start: w.start, end: w.end })), o).map(g => ({ ...g, start: +g.start.toFixed(3), end: +g.end.toFixed(3) }));
 
@@ -68,7 +69,7 @@ async function speakHeygen({ text, voiceId, model, speed = 1, language, boost })
   if (boost != null) body.expressiveness_boost = boost;
   const j = await hg('/v3/models/audio/tts', { method: 'POST', body: JSON.stringify(body) });
   const d = j.data || j; if (!d.audio_url) throw new Error('HeyGen returned no audio_url');
-  const buf = Buffer.from(await (await fetch(d.audio_url)).arrayBuffer());
+  const buf = Buffer.from(await (await fetchRetry(d.audio_url, {}, { timeoutMs: 120_000 })).arrayBuffer());
   return { buf, words: heygenWords(d), duration: d.duration != null ? +(+d.duration).toFixed(3) : null, voice, model: model_name, provider: 'heygen' };
 }
 
