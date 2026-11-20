@@ -2,6 +2,41 @@
 (() => {
   const { view, api, h, raw, esc, fmt, fmtFull, stat, barChart, err, toast, busy, state, date } = TD;
 
+  // ---- AI apps on this Mac: TubeDesk connects itself to every one it finds ----
+  async function renderAiApps(el) {
+    if (!el) return;
+    let d; try { d = await api('/ai-clients'); } catch (e) { el.innerHTML = h`<h2>AI apps on this Mac</h2><div class="note bad">${e.message}</div>`; return; }
+    const label = { connected: ['ok', 'connected'], 'connected-now': ['ok', 'connected'], 'user-managed': ['info', 'your own setup kept'], error: ['bad', 'error'], removed: ['', 'disconnected'] };
+    const inst = d.clients.filter(c => c.installed);
+    el.innerHTML = h`<h2>AI apps on this Mac <span class="badge ${d.auto ? 'ok' : 'warn'}">${d.auto ? 'automatic' : 'off'}</span></h2>
+      <p class="mini">Like installing vidIQ: TubeDesk adds itself to every AI app it finds here and gives each one a standing rule — use TubeDesk for anything about your YouTube, Instagram and TikTok, never vidIQ, and know all your brands without asking. It re-checks every time TubeDesk starts, so apps you install later are picked up too.</p>
+      ${inst.length ? h`<table><tbody>${inst.map(c => { const [cls, txt] = label[c.status] || ['', c.status ? c.status : 'not checked yet']; return h`<tr><td><b>${c.name}</b>${c.note && c.status === 'connected-now' ? h`<div class="mini">${c.note}</div>` : ''}${c.error ? h`<div class="mini down">${c.error}</div>` : ''}</td><td><span class="badge ${cls}">${txt}</span></td></tr>`; }).join('')}</tbody></table>` : h`<div class="mini">No AI apps found on this Mac yet.</div>`}
+      <div class="mini" style="margin-top:6px">Not found: ${d.clients.filter(c => !c.installed).map(c => c.name).join(', ') || '—'}</div>
+      <div class="row" style="margin-top:8px"><button class="sm primary" id="ai-reconnect">Check &amp; connect now</button><label class="row mini"><input type="checkbox" id="ai-auto" ${d.auto ? 'checked' : ''}> Keep connected automatically</label><button class="sm ghost" id="ai-remove">Disconnect from all</button></div>`;
+    el.querySelector('#ai-reconnect').onclick = async e => { busy(e.target, true); try { await api('/ai-clients/connect', { method: 'POST', body: {} }); toast('Connected', 'ok'); } catch (x) { err(x); } renderAiApps(el); };
+    el.querySelector('#ai-remove').onclick = async e => { busy(e.target, true); try { await api('/settings', { method: 'PUT', body: { ai_autoconnect: '0' } }); await api('/ai-clients/connect', { method: 'POST', body: { remove: true } }); toast('Disconnected', 'ok'); } catch (x) { err(x); } renderAiApps(el); };
+    el.querySelector('#ai-auto').onchange = async e => { await api('/settings', { method: 'PUT', body: { ai_autoconnect: e.target.checked ? '1' : '0' } }); toast('Saved', 'ok'); };
+  }
+
+  // ---- Brands: one Instagram / TikTok account per YouTube channel ----
+  async function renderSocial(el) {
+    if (!el) return;
+    let accts, b; try { [accts, b] = await Promise.all([api('/social-accounts'), api('/brands')]); } catch (e) { el.innerHTML = h`<h2>Brands</h2><div class="note bad">${e.message}</div>`; return; }
+    const owned = b.brands;
+    const opts = sel => h`<option value="">— not linked —</option>${owned.map(c => h`<option value="${c.channelId}" ${sel === c.channelId ? 'selected' : ''}>${c.title}</option>`).join('')}`;
+    el.innerHTML = h`<h2>Brands: Instagram &amp; TikTok accounts</h2>
+      <p class="mini">Link each account to its brand's YouTube channel. Shorts, the reels radar, scheduled posts and the weekly board then use the right account for every brand — no one has to say which.</p>
+      ${owned.length ? h`<table><thead><tr><th>Brand</th><th>Instagram</th><th>TikTok</th></tr></thead><tbody>${owned.map(c => h`<tr><td><b>${c.title}</b></td><td>${c.instagram ? '@' + c.instagram : h`<span class="mini">—</span>`}</td><td>${c.tiktok ? '@' + c.tiktok : h`<span class="mini">—</span>`}</td></tr>`).join('')}</tbody></table>` : ''}
+      ${accts.length ? h`<h3 style="margin-top:12px">Accounts</h3><table><tbody>${accts.map(a => h`<tr><td><b>${a.platform === 'instagram' ? 'Instagram' : 'TikTok'} @${a.username || a.accountId}</b>${a.isDefault ? h` <span class="badge">default</span>` : ''}</td><td><select data-link="${a.platform}|${a.accountId}">${opts(a.channelId)}</select></td><td>${a.isDefault ? '' : h`<button class="sm ghost" data-def="${a.platform}|${a.accountId}">Make default</button>`}<button class="sm ghost" data-rm="${a.platform}|${a.accountId}">Remove</button></td></tr>`).join('')}</tbody></table>` : h`<div class="mini">No Instagram or TikTok accounts yet.</div>`}
+      <div class="row" style="margin-top:10px;flex-wrap:wrap"><input id="ig-token" placeholder="Instagram access token (Meta app → Instagram → Generate token)" style="flex:2;min-width:240px"><select id="ig-brand">${opts('')}</select><button class="sm primary" id="ig-add">Add Instagram account</button></div>
+      <div class="mini" style="margin-top:6px">TikTok: Settings → TikTok → Connect, once per brand account (or ask your AI to do it — <code>connect_account</code>).</div>`;
+    const split = v => v.split('|');
+    el.querySelectorAll('[data-link]').forEach(s => s.onchange = async () => { const [p, a] = split(s.dataset.link); try { await api(`/social-accounts/${p}/${encodeURIComponent(a)}/link`, { method: 'POST', body: { channel: s.value || null } }); toast('Linked', 'ok'); renderSocial(el); } catch (x) { err(x); } });
+    el.querySelectorAll('[data-def]').forEach(bt => bt.onclick = async () => { const [p, a] = split(bt.dataset.def); await api(`/social-accounts/${p}/${encodeURIComponent(a)}/default`, { method: 'POST' }); renderSocial(el); });
+    el.querySelectorAll('[data-rm]').forEach(bt => bt.onclick = async () => { const [p, a] = split(bt.dataset.rm); await api(`/social-accounts/${p}/${encodeURIComponent(a)}`, { method: 'DELETE' }); renderSocial(el); });
+    el.querySelector('#ig-add').onclick = async e => { busy(e.target, true); try { const r = await api('/social-accounts/instagram', { method: 'POST', body: { token: el.querySelector('#ig-token').value.trim(), channel: el.querySelector('#ig-brand').value || null } }); toast(`Added @${r.username}`, 'ok'); renderSocial(el); } catch (x) { err(x); busy(e.target, false); } };
+  }
+
   // ---- Use TubeDesk from any AI: remote access (Tailscale Funnel), connector URLs, approvals, connected apps, API keys ----
   async function renderAnyAi(el) {
     if (!el) return;
@@ -121,6 +156,8 @@
         <div class="row"><button id="ttauth" class="sm">Connect TikTok</button><input id="ttcode" placeholder="paste the code (or the full redirect URL)" style="flex:1"><button id="ttconnect" class="primary sm">Finish</button></div>
         <div class="mini" id="ttout" style="margin-top:8px">${ps.tiktok?.connected ? h`<span class="up">✓ connected as @${ps.tiktok.username || '?'}</span>` : ps.tiktok?.configured ? 'app configured — not connected yet' : ''}</div>
         <label class="row mini" style="margin-top:8px"><input type="checkbox" id="tt_audited" ${s.tt_audited === '1' ? 'checked' : ''}> My app passed TikTok's audit (posts can be public). Until then TikTok forces new posts to "Only me".</label></div>
+      <div class="card" id="ai-apps" style="grid-column:1/-1"><h2>AI apps on this Mac</h2><div class="loading"><span class="spinner"></span></div></div>
+      <div class="card" id="social-accts" style="grid-column:1/-1"><h2>Brands: Instagram &amp; TikTok accounts</h2><div class="loading"><span class="spinner"></span></div></div>
       <div class="card" id="any-ai" style="grid-column:1/-1"><h2>Use TubeDesk from any AI</h2><div class="loading"><span class="spinner"></span></div></div>
       <div class="card"><h2>TubeDesk inside Claude</h2><p class="mini">The TubeDesk plugin puts everything here into Claude: ask "what should my next video be?", "score these titles", "how did my last upload do?" or "post this at the best time" and Claude answers from your own data and acts through TubeDesk. It adds the TubeDesk tools plus five workflows — video ideas, packaging, channel checkup, publishing and Shorts.</p>
         <div class="step"><div class="n">1</div><div><b>Claude desktop app:</b> <a class="btn sm primary" href="/api/plugin/download" download>Download the plugin</a> then drag <code>tubedesk.plugin</code> into a Claude chat and press Install.</div></div>
@@ -146,6 +183,8 @@
     main.querySelector('#tt_audited').onchange = async e => { await api('/settings', { method: 'PUT', body: { tt_audited: e.target.checked ? '1' : '0' } }); };
     main.querySelector('#snap').onclick = async e => { busy(e.target, true); try { const r2 = await api('/snapshot/run', { method: 'POST' }); toast(`Snapshot: ${r2.channels} channels, ${r2.videos} videos, ${r2.alerts} alerts`, 'ok'); await TD.refreshChannels(); TD.route(); } catch (x) { err(x); } busy(e.target, false); };
     renderAnyAi(main.querySelector('#any-ai'));
+    renderAiApps(main.querySelector('#ai-apps'));
+    renderSocial(main.querySelector('#social-accts'));
     api('/shorts/status').then(t => { const e = t.engine, el = main.querySelector('#whisper-line'); if (el) el.innerHTML = h`<b>Local transcription (Shorts, hook scoring):</b> ${e.whisper ? h`<span class="up">✓ whisper.cpp</span> at <code>${e.whisper}</code> · model ${e.modelName} ${e.modelReady ? '(downloaded)' : '(downloads on first use)'}` : h`<span class="down">✕ not installed</span> — <code>brew install whisper-cpp</code> (free, runs on your Mac)`}`; }).catch(() => {});
     main.querySelector('#cache').onclick = async () => { const r2 = await api('/cache/clear', { method: 'POST', body: {} }); toast(`Cleared ${r2.cleared} cached responses`); };
     main.querySelector('#restart').onclick = async () => {

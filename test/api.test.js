@@ -23,7 +23,7 @@ before(async () => {
   mock = await startMock(0);
   const port = 4900 + Math.floor(Math.random() * 90);
   base = `http://127.0.0.1:${port}`;
-  child = spawn(process.execPath, ['src/server.js'], { cwd: path.join(path.dirname(new URL(import.meta.url).pathname), '..'), env: { ...process.env, PORT: String(port), TUBEDESK_DATA_DIR: dataDir, TUBEDESK_NO_SCHEDULER: '1', YT_API_BASE: `http://127.0.0.1:${mock.port}/youtube/v3`, YT_ANALYTICS_BASE: `http://127.0.0.1:${mock.port}/v2/reports`, YT_SUGGEST_URL: `http://127.0.0.1:${mock.port}/complete/search`, YT_UPLOAD_BASE: `http://127.0.0.1:${mock.port}/upload`, IG_GRAPH_BASE: `http://127.0.0.1:${mock.port}/ig`, TT_API_BASE: `http://127.0.0.1:${mock.port}/tt`, TT_AUTH_BASE: `http://127.0.0.1:${mock.port}/tt-auth`, EL_API_BASE: `http://127.0.0.1:${mock.port}/el`, HF_API_BASE: `http://127.0.0.1:${mock.port}/hf`, HEYGEN_API_BASE: `http://127.0.0.1:${mock.port}/hg` }, stdio: ['ignore', 'pipe', 'pipe'] });
+  child = spawn(process.execPath, ['src/server.js'], { cwd: path.join(path.dirname(new URL(import.meta.url).pathname), '..'), env: { ...process.env, PORT: String(port), TUBEDESK_DATA_DIR: dataDir, TUBEDESK_NO_SCHEDULER: '1', TUBEDESK_NO_AUTOCONNECT: '1', YT_API_BASE: `http://127.0.0.1:${mock.port}/youtube/v3`, YT_ANALYTICS_BASE: `http://127.0.0.1:${mock.port}/v2/reports`, YT_SUGGEST_URL: `http://127.0.0.1:${mock.port}/complete/search`, YT_UPLOAD_BASE: `http://127.0.0.1:${mock.port}/upload`, IG_GRAPH_BASE: `http://127.0.0.1:${mock.port}/ig`, TT_API_BASE: `http://127.0.0.1:${mock.port}/tt`, TT_AUTH_BASE: `http://127.0.0.1:${mock.port}/tt-auth`, EL_API_BASE: `http://127.0.0.1:${mock.port}/el`, HF_API_BASE: `http://127.0.0.1:${mock.port}/hf`, HEYGEN_API_BASE: `http://127.0.0.1:${mock.port}/hg` }, stdio: ['ignore', 'pipe', 'pipe'] });
   child.stderr.on('data', d => process.stderr.write('[server] ' + d));
   for (let i = 0; i < 50; i++) { try { await fetch(base + '/api/status'); break; } catch { await new Promise(r => setTimeout(r, 100)); } }
 });
@@ -507,5 +507,5 @@ test('similar channels + Studio overlay scoring endpoint', async () => {
   assert.ok(typeof st.demand.index === 'number' && st.demand.band); assert.ok(st.radar && (typeof st.radar.score === 'number' || st.radar.score === null || st.radar.error), JSON.stringify(st.radar).slice(0, 200));
   assert.ok(Array.isArray(st.suggestedTags));
   const guide = await (await fetch(base + '/api/agent')).text(); assert.ok(/media\/voiceover/.test(guide) && /media\/thumbnails/.test(guide) && /similar-channels/.test(guide));
-  assert.equal((await ok('/status')).version, '1.9.0');
+  assert.equal((await ok('/status')).version, '2.0.0');
 });

@@ -3,6 +3,7 @@
 // vertical 1080×1920 clips with word-timed captions and an on-screen hook, then schedule them into your best
 // Shorts slots on YouTube and Instagram through a local publish queue (one upload per slot, so the YouTube
 // quota is spread across days).
+import * as accounts from './accounts.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { db, getSetting, DATA_DIR } from '../db.js';
@@ -42,7 +43,7 @@ CREATE TABLE IF NOT EXISTS clips (
 CREATE INDEX IF NOT EXISTS idx_clips_video ON clips(video_id);
 CREATE TABLE IF NOT EXISTS publish_queue (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  platform TEXT NOT NULL,        -- youtube | instagram
+  platform TEXT NOT NULL,        -- youtube | instagram | tiktok
   channel_id TEXT,
   clip_id INTEGER,
   params_json TEXT NOT NULL,
@@ -68,7 +69,7 @@ export function settings() {
     enabled: getSetting('clips_enabled', '1') === '1',
     count: Number(getSetting('clips_count', 3)),
     publish: getSetting('clips_publish', 'auto'),          // auto | review
-    platforms: String(getSetting('clips_platforms', 'youtube,instagram')).split(',').map(s => s.trim()).filter(Boolean),
+    platforms: String(getSetting('clips_platforms', 'youtube,instagram,tiktok')).split(',').map(s => s.trim()).filter(Boolean),
     minSeconds: Number(getSetting('clips_min_seconds', 15)),
     maxSeconds: Number(getSetting('clips_max_seconds', 58)),
   };
@@ -211,9 +212,10 @@ const YT_LEAD = 90 * MIN;            // YouTube uploads this early as private + 
 const OVERDUE = HOUR;                // a slot missed by more than this (Mac asleep/off) is moved, not posted late
 const MAX_QUOTA_SHIFTS = 3;
 
-function queueParams(c, platform) {
+function queueParams(c, platform, account = null) {
   if (platform === 'youtube') return { file: c.file, channelId: c.channel_id, title: c.title, description: `${c.description || ''}\n\nFull video: https://youtu.be/${c.video_id}\n#Shorts`.trim(), privacy: 'private', tags: ['shorts'] };
-  return { kind: 'reel', file: c.file, caption: `${c.title}\n\n${c.description || ''}`.trim(), cover: c.cover || undefined };
+  if (platform === 'tiktok') return { file: c.file, title: `${c.title}${c.description ? ' — ' + c.description : ''}`.slice(0, 2200), account };
+  return { kind: 'reel', file: c.file, caption: `${c.title}\n\n${c.description || ''}`.trim(), cover: c.cover || undefined, account };
 }
 const runAtFor = (platform, publishAt) => platform === 'youtube' ? new Date(Date.parse(publishAt) - YT_LEAD).toISOString() : publishAt;
 
@@ -224,15 +226,19 @@ export function schedule(clipIds) {
   if (!clips.length) return [];
   const channelId = clips[0].channel_id;
   const slots = bestSlots(channelId, { format: 'short', count: clips.length });
-  const igOn = s.platforms.includes('instagram') && pub.instagramStatus().configured;
+  // Each brand posts to its own accounts: the Instagram/TikTok account linked to this YouTube channel.
+  const igAcct = s.platforms.includes('instagram') ? accounts.forBrand('instagram', channelId) : null;
+  const ttAcct = s.platforms.includes('tiktok') ? accounts.forBrand('tiktok', channelId) : null;
+  const igOn = !!igAcct?.token, ttOn = !!ttAcct?.refresh_token;
   const ytOn = s.platforms.includes('youtube') && isAuthorized(channelId);
   const out = [];
   clips.forEach((c, i) => {
     const slot = slots[i];
     if (!slot) return;
     const publishAt = slot.at;
-    for (const [platform, on] of [['youtube', ytOn], ['instagram', igOn]]) if (on) enqueue({ platform, channelId, clipId: c.id, publishAt, runAt: runAtFor(platform, publishAt), params: queueParams(c, platform) });
-    if (ytOn || igOn) { db.prepare("UPDATE clips SET status = 'queued', publish_at = ?, error = NULL WHERE id = ?").run(publishAt, c.id); out.push({ clipId: c.id, publishAt, local: slot.local, youtube: ytOn, instagram: igOn }); }
+    const targets = [['youtube', ytOn, null], ['instagram', igOn, igAcct?.account_id], ['tiktok', ttOn, ttAcct?.account_id]];
+    for (const [platform, on, account] of targets) if (on) enqueue({ platform, channelId, clipId: c.id, publishAt, runAt: runAtFor(platform, publishAt), params: queueParams(c, platform, account) });
+    if (ytOn || igOn || ttOn) { db.prepare("UPDATE clips SET status = 'queued', publish_at = ?, error = NULL WHERE id = ?").run(publishAt, c.id); out.push({ clipId: c.id, publishAt, local: slot.local, youtube: ytOn, instagram: igOn ? '@' + (igAcct.username || igAcct.account_id) : false, tiktok: ttOn ? '@' + (ttAcct.username || ttAcct.account_id) : false }); }
   });
   return out;
 }
@@ -345,7 +351,8 @@ async function processInner() {
         }
         const late = !q.publish_at || Date.parse(q.publish_at) < Date.now() + 5 * MIN;
         job = pub.publishYouTube({ ...params, ...(late ? { privacy: 'public', publishAt: undefined } : { privacy: 'private', publishAt: q.publish_at }) });
-      } else job = pub.publishInstagram(params);
+      } else if (q.platform === 'tiktok') job = pub.publishTikTok(params);
+      else job = pub.publishInstagram(params);
       db.prepare('UPDATE publish_queue SET job_id = ? WHERE id = ?').run(job.id, q.id);
       const fin = await pub.waitForJob(job.id, 30 * MIN);
       if (fin.status === 'running' || fin.status === 'queued') { // still uploading: settle it on a later pass, never retry it

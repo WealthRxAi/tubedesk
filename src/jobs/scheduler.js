@@ -11,6 +11,7 @@ import * as clips from '../services/clips.js';
 import * as portfolio from '../services/portfolio.js';
 import * as igwatch from '../services/igwatch.js';
 import * as social from '../services/social.js';
+import * as pub from '../services/publish.js';
 import { aiAvailable } from '../services/radar.js';
 
 let running = null;
@@ -64,9 +65,10 @@ export function startAutopilotJobs(tz) {
   const ideasExpr = getSetting('ideas_cron', '50 6 * * *');
   if (cron.validate(reachExpr)) cron.schedule(reachExpr, async () => {
     await reach.syncAll().then(r => console.log('[reach]', r)).catch(e => console.error('[reach]', e.message));
-    if (igwatch.configured()) await igwatch.syncMedia({ limit: 25 }).catch(e => console.error('[instagram]', e.message)); // baseline for the reel radar
+    await pub.refreshInstagramToken({ all: true }).catch(e => console.error('[instagram token]', e.message)); // 60-day tokens: refresh every account monthly
+    if (igwatch.configured()) await igwatch.syncMedia({ limit: 25, all: true }).catch(e => console.error('[instagram]', e.message)); // baseline for the reel radar
     if (igwatch.configured()) await social.syncAllAccounts().catch(e => console.error('[instagram accounts]', e.message)); // tracked accounts → outliers + follower history
-    if (social.tiktokStatus().connected) await social.tiktokSyncVideos().catch(e => console.error('[tiktok]', e.message));
+    if (social.tiktokStatus().connected) await social.tiktokSyncVideos({ all: true }).catch(e => console.error('[tiktok]', e.message));
   }, { timezone: tz });
   // Publish queue (scheduled Shorts / Instagram posts) every 5 minutes; weekly summary Monday morning.
   cron.schedule('*/5 * * * *', () => clips.processQueue().catch(e => console.error('[queue]', e.message)), { timezone: tz });

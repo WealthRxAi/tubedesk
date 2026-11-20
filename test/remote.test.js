@@ -67,7 +67,7 @@ before(async () => {
   const port = 6500 + Math.floor(Math.random() * 400), pport = port + 1;
   local = `http://127.0.0.1:${port}`; pub = `http://127.0.0.1:${pport}`;
   const M = `http://127.0.0.1:${mock.port}`;
-  child = spawn(process.execPath, ['src/server.js'], { cwd: ROOT, env: { ...process.env, PORT: String(port), TUBEDESK_PUBLIC_PORT: String(pport), TUBEDESK_DATA_DIR: dataDir, TUBEDESK_NO_SCHEDULER: '1',
+  child = spawn(process.execPath, ['src/server.js'], { cwd: ROOT, env: { ...process.env, PORT: String(port), TUBEDESK_PUBLIC_PORT: String(pport), TUBEDESK_DATA_DIR: dataDir, TUBEDESK_NO_SCHEDULER: '1', TUBEDESK_NO_AUTOCONNECT: '1',
     YT_API_BASE: `${M}/youtube/v3`, YT_ANALYTICS_BASE: `${M}/v2/reports`, YT_SUGGEST_URL: `${M}/complete/search`, YT_UPLOAD_BASE: `${M}/upload`, FAKE_TS_STATE: TS_STATE, FAKE_TS_MODE: 'needs-approval', TUBEDESK_MAX_APPROVAL_TEXTS: '1000', TUBEDESK_RATE_SCALE: '50' }, stdio: ['ignore', 'ignore', 'pipe'] });
   child.stderr.on('data', d => process.stderr.write('[server] ' + d));
   for (let i = 0; i < 80; i++) { try { await fetch(pub + '/'); await fetch(local + '/api/status'); break; } catch { await new Promise(r => setTimeout(r, 100)); } }

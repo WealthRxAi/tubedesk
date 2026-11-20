@@ -4,10 +4,11 @@ import { fileURLToPath } from 'node:url';
 import { getSetting, DATA_DIR } from './db.js';
 import { api, oauthCallback } from './routes/api.js';
 import { startScheduler } from './jobs/scheduler.js';
-import { servePublic, recoverJobs } from './services/publish.js';
+import { servePublic, recoverJobs, adoptLegacyInstagram } from './services/publish.js';
 import { recoverAfterRestart } from './services/clips.js';
 import { createPublicApp } from './public-server.js';
-import { remotePort } from './services/remote.js';
+import { remotePort, autoEnable } from './services/remote.js';
+import { connectAll, autoConnectEnabled } from './services/ai-clients.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -77,6 +78,13 @@ app.listen(PORT, '0.0.0.0', () => {
   // Uploads a previous run left half-done are settled or marked failed — never re-sent automatically.
   try { recoverJobs(); recoverAfterRestart(); } catch (e) { console.error('restart recovery:', e.message); }
   if (process.env.TUBEDESK_NO_SCHEDULER !== '1') startScheduler();
+  adoptLegacyInstagram().catch(e => console.error('instagram:', e.message));
+  // Zero-config: connect TubeDesk to every AI app on this Mac, and turn remote access on once Tailscale is signed in.
+  if (process.env.TUBEDESK_NO_AUTOCONNECT !== '1') {
+    if (autoConnectEnabled()) connectAll().then(r => console.log('AI apps:', r.filter(x => x.installed).map(x => `${x.name} ${x.status}`).join(', ') || 'none found')).catch(e => console.error('AI apps:', e.message));
+    const tick = () => autoEnable().catch(e => console.error('remote access:', e.message));
+    tick(); setInterval(tick, 10 * 60e3).unref();
+  }
 });
 
 // The public listener for remote AI apps (Tailscale Funnel forwards here). Loopback only: nothing on the network can

@@ -4,6 +4,7 @@
 //    locally, and outliers computed against each account's own median (likes + comments; views are not public).
 //  - TikTok: Login Kit OAuth (paste-the-code flow), Display API (your profile + videos with views/likes/shares),
 //    Content Posting API (upload + publish). Third-party TikTok data has no official API, so none is pretended here.
+import * as accounts from './accounts.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -44,6 +45,7 @@ CREATE TABLE IF NOT EXISTS tiktok_videos (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 `);
+try { db.exec('ALTER TABLE tiktok_videos ADD COLUMN open_id TEXT'); } catch { /* already there */ }
 
 // ---------- helpers ----------
 const iso = t => t ? new Date(String(t).replace(/([+-]\d{2})(\d{2})$/, '$1:$2')).toISOString() : null;
@@ -55,7 +57,7 @@ const MEDIA_FIELDS = 'id,caption,media_type,media_product_type,timestamp,permali
 /** Public profile + recent media of any professional Instagram account, by username. */
 export async function igDiscover(username, { limit = 50 } = {}) {
   const u = clean(username); if (!u) throw new Error('username is required');
-  const me = getSetting('ig_user_id'); if (!me) throw new Error('Instagram is not configured (Settings → Instagram).');
+  const me = accounts.current('instagram')?.account_id; if (!me) throw new Error('Instagram is not configured (add_instagram_account).');
   const fields = `business_discovery.username(${u}){id,username,name,biography,website,profile_picture_url,followers_count,follows_count,media_count,media.limit(${limit}){${MEDIA_FIELDS}}}`;
   let r;
   try { r = await ig(me, { params: { fields } }); }
@@ -140,7 +142,7 @@ export function igOutliers({ days = 90, minX = 1.5, limit = 50, username = null,
 // ---------- Instagram: hashtags (30 unique tags per 7 days per account — cached locally) ----------
 export async function igHashtag(tag, { kind = 'top', limit = 50, maxAgeHours = 24 } = {}) {
   const t = String(tag || '').trim().replace(/^#/, '').toLowerCase(); if (!t) throw new Error('tag is required');
-  const me = getSetting('ig_user_id'); if (!me) throw new Error('Instagram is not configured (Settings → Instagram).');
+  const me = accounts.current('instagram')?.account_id; if (!me) throw new Error('Instagram is not configured (add_instagram_account).');
   const cached = db.prepare('SELECT * FROM ig_hashtag_cache WHERE tag = ? AND kind = ?').get(t, kind);
   if (cached && Date.now() - Date.parse(cached.fetched_at) < maxAgeHours * 3600e3) return { ...JSON.parse(cached.json), cached: true };
   const s = await ig('ig_hashtag_search', { params: { user_id: me, q: t } });
@@ -156,41 +158,71 @@ export async function igHashtag(tag, { kind = 'top', limit = 50, maxAgeHours = 2
 export const TT_SCOPES = ['user.info.basic', 'user.info.profile', 'user.info.stats', 'video.list', 'video.publish', 'video.upload'];
 export function tiktokStatus() {
   const configured = !!(getSetting('tt_client_key') && getSetting('tt_client_secret'));
-  const connected = !!getSetting('tt_refresh_token');
-  return { configured, connected, openId: getSetting('tt_open_id') || null, username: getSetting('tt_username') || null, displayName: getSetting('tt_display_name') || null, redirectUri: getSetting('tt_redirect_uri') || null, tokenExpiresAt: getSetting('tt_access_expires_at') || null, audited: getSetting('tt_audited', '0') === '1' };
+  const d = accounts.resolve('tiktok');
+  return { configured, connected: !!d?.refresh_token, openId: d?.account_id || null, username: d?.username || null, displayName: d?.display_name || null, redirectUri: getSetting('tt_redirect_uri') || null, tokenExpiresAt: d?.token_expires_at || null, audited: getSetting('tt_audited', '0') === '1', accounts: accounts.list('tiktok') };
 }
 /** Step 1 of the paste-the-code flow: open this URL, approve, copy the `code` from the page you land on. */
-export function tiktokAuthUrl() {
+// Each sign-in link remembers which brand it was made for (by its state), so two brands connecting at once don't mix.
+const pending = () => { try { return JSON.parse(getSetting('tt_connect_pending', '') || '{}'); } catch { return {}; } };
+const savePending = p => setSetting('tt_connect_pending', JSON.stringify(p));
+export function tiktokAuthUrl({ channel = null } = {}) {
   const key = getSetting('tt_client_key'), redirect = getSetting('tt_redirect_uri');
   if (!key || !redirect) throw new Error('TikTok app not configured: client key and redirect URI in Settings → TikTok.');
   const state = crypto.randomBytes(8).toString('hex'); setSetting('tt_oauth_state', state);
+  const p = Object.fromEntries(Object.entries(pending()).filter(([, v]) => Date.now() - v.at < 3600e3));
+  p[state] = { channel: channel || null, at: Date.now() };
+  savePending(p);
   const u = new URL(TT_AUTH);
   u.search = new URLSearchParams({ client_key: key, response_type: 'code', scope: TT_SCOPES.join(','), redirect_uri: redirect, state }).toString();
   return { url: u.toString(), state };
 }
-async function ttToken(body) {
+async function ttToken(body, row = null) {
   const t0 = Date.now();
   const res = await fetch(`${TT}/oauth/token/`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(body) });
   const j = await res.json().catch(() => ({}));
   logApi({ api: 'tiktok', endpoint: 'oauth/token', units: 0, cached: 0, ms: Date.now() - t0, ok: res.ok && !j.error ? 1 : 0 });
   if (!res.ok || j.error) throw new Error(`TikTok auth: ${j.error_description || j.error || res.status}`);
-  setSetting('tt_access_token', j.access_token); setSetting('tt_refresh_token', j.refresh_token); setSetting('tt_open_id', j.open_id);
-  setSetting('tt_access_expires_at', new Date(Date.now() + (j.expires_in || 86400) * 1000).toISOString()); setSetting('tt_scope', j.scope || '');
+  // Tokens belong to the TikTok account (open_id) that signed in — one row per brand account.
+  accounts.upsert('tiktok', { accountId: j.open_id || row?.account_id, token: j.access_token, refreshToken: j.refresh_token, tokenExpiresAt: new Date(Date.now() + (j.expires_in || 86400) * 1000).toISOString() });
+  setSetting('tt_scope', j.scope || '');
   return j;
 }
 /** Step 2: exchange the pasted code (or a full redirect URL) for tokens. */
-export async function tiktokConnect(codeOrUrl) {
+export async function tiktokConnect(codeOrUrl, { channel = null, state = null, remote = false } = {}) {
   let code = String(codeOrUrl || '').trim();
-  if (/^https?:\/\//.test(code)) { const u = new URL(code); code = u.searchParams.get('code') || ''; const st = u.searchParams.get('state'); if (st && st !== getSetting('tt_oauth_state')) throw new Error('state mismatch — start the connection again from TubeDesk'); }
+  if (/^https?:\/\//.test(code)) { const u = new URL(code); code = u.searchParams.get('code') || ''; state = u.searchParams.get('state') || state; }
   if (!code) throw new Error('paste the code (or the full URL you were redirected to)');
-  await ttToken({ client_key: getSetting('tt_client_key'), client_secret: getSetting('tt_client_secret'), code, grant_type: 'authorization_code', redirect_uri: getSetting('tt_redirect_uri') });
-  const me = await tiktokMe();
-  return { connected: true, ...me };
+  // Which brand this sign-in was for: the channel given now, else the link's state, else the only open link.
+  const p = Object.fromEntries(Object.entries(pending()).filter(([, v]) => Date.now() - v.at < 3600e3));
+  if (state && !p[state] && state !== getSetting('tt_oauth_state')) throw new Error('state mismatch — start the connection again from TubeDesk');
+  let fromLink = null;
+  if (state && p[state]) fromLink = p[state];
+  else if (!state) { const open = Object.values(p); const brands = [...new Set(open.map(v => v.channel || ''))]; if (brands.length === 1) fromLink = open[0]; else if (!channel && brands.length > 1) throw new Error(`Several TikTok sign-ins are open (${open.length}). Say which brand this one is for: channel.`); }
+  const explicit = !!channel;
+  channel = channel || fromLink?.channel || null;
+  const j = await ttToken({ client_key: getSetting('tt_client_key'), client_secret: getSetting('tt_client_secret'), code, grant_type: 'authorization_code', redirect_uri: getSetting('tt_redirect_uri') });
+  const row = accounts.resolve('tiktok', j.open_id);
+  const me = await accounts.withAccount('tiktok', row, () => tiktokMe());
+  // the sign-in link is used up
+  if (state) delete p[state]; else if (fromLink) for (const [k, v] of Object.entries(p)) if (v === fromLink) delete p[k];
+  savePending(p);
+  let warning = null;
+  if (channel) {
+    const cur = accounts.resolve('tiktok', j.open_id);
+    // an account already linked to another brand moves only when told to explicitly (not just because of the open link)
+    if (cur.channel_id && cur.channel_id !== channel && !explicit) warning = `@${cur.username || cur.account_id} is already linked to another brand — left as is. Sign in with this brand's own TikTok account (its browser profile), or link it explicitly.`;
+    else { try { accounts.link('tiktok', j.open_id, channel, { onlyIfFree: remote }); } catch (e) { if (e.status !== 403) throw e; warning = e.message; } }
+  }
+  return { connected: true, ...me, channelId: accounts.resolve('tiktok', j.open_id)?.channel_id || null, ...(warning ? { warning } : {}) };
 }
 async function ttAccess() {
-  if (!getSetting('tt_refresh_token')) throw new Error('TikTok is not connected (Settings → TikTok → Connect).');
-  if (Date.parse(getSetting('tt_access_expires_at') || 0) - Date.now() < 5 * 60e3) await ttToken({ client_key: getSetting('tt_client_key'), client_secret: getSetting('tt_client_secret'), grant_type: 'refresh_token', refresh_token: getSetting('tt_refresh_token') });
-  return getSetting('tt_access_token');
+  const row = accounts.current('tiktok');
+  if (!row?.refresh_token) throw new Error('TikTok is not connected (connect_account service "tiktok").');
+  if (Date.parse(row.token_expires_at || 0) - Date.now() < 5 * 60e3) {
+    await ttToken({ client_key: getSetting('tt_client_key'), client_secret: getSetting('tt_client_secret'), grant_type: 'refresh_token', refresh_token: row.refresh_token }, row);
+    return accounts.resolve('tiktok', row.account_id).token;
+  }
+  return row.token;
 }
 export async function tt(pathname, { method = 'POST', params = {}, json = undefined } = {}) {
   const token = await ttAccess();
@@ -205,22 +237,27 @@ export async function tt(pathname, { method = 'POST', params = {}, json = undefi
 export async function tiktokMe() {
   const d = await tt('user/info/', { method: 'GET', params: { fields: 'open_id,union_id,avatar_url,display_name,username,profile_deep_link,is_verified,follower_count,following_count,likes_count,video_count' } });
   const u = d.user || {};
-  setSetting('tt_username', u.username || ''); setSetting('tt_display_name', u.display_name || '');
+  const row = accounts.current('tiktok');
+  if (row) accounts.upsert('tiktok', { accountId: u.open_id || row.account_id, username: u.username || null, displayName: u.display_name || null });
   return { openId: u.open_id, username: u.username, displayName: u.display_name, avatar: u.avatar_url, link: u.profile_deep_link, verified: !!u.is_verified, followers: u.follower_count, following: u.following_count, likes: u.likes_count, videos: u.video_count };
 }
-export async function tiktokSyncVideos({ max = 100 } = {}) {
-  const up = db.prepare(`INSERT INTO tiktok_videos (id, title, description, published_at, duration, cover, share_url, embed_link, views, likes, comments, shares) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET title = excluded.title, views = excluded.views, likes = excluded.likes, comments = excluded.comments, shares = excluded.shares, cover = excluded.cover, updated_at = datetime('now')`);
+export async function tiktokSyncVideos({ max = 100, all = false } = {}) {
+  if (all) { const r = await accounts.eachAccount('tiktok', row => tiktokSyncVideos({ max }).then(x => ({ account: row.username || row.account_id, ...x }))); return { synced: r.reduce((a, x) => a + x.synced, 0), accounts: r }; }
+  const openId = accounts.current('tiktok')?.account_id || null;
+  const up = db.prepare(`INSERT INTO tiktok_videos (id, title, description, published_at, duration, cover, share_url, embed_link, views, likes, comments, shares, open_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET title = excluded.title, views = excluded.views, likes = excluded.likes, comments = excluded.comments, shares = excluded.shares, cover = excluded.cover, open_id = excluded.open_id, updated_at = datetime('now')`);
   let cursor, n = 0, hasMore = true;
   while (hasMore && n < max) {
     const d = await tt('video/list/', { params: { fields: 'id,title,video_description,create_time,duration,cover_image_url,share_url,embed_link,view_count,like_count,comment_count,share_count' }, json: { max_count: Math.min(20, max - n), ...(cursor ? { cursor } : {}) } });
-    for (const v of d.videos || []) { up.run(v.id, v.title || '', v.video_description || '', new Date((v.create_time || 0) * 1000).toISOString(), v.duration ?? null, v.cover_image_url || null, v.share_url || null, v.embed_link || null, v.view_count ?? null, v.like_count ?? null, v.comment_count ?? null, v.share_count ?? null); n++; }
+    for (const v of d.videos || []) { up.run(v.id, v.title || '', v.video_description || '', new Date((v.create_time || 0) * 1000).toISOString(), v.duration ?? null, v.cover_image_url || null, v.share_url || null, v.embed_link || null, v.view_count ?? null, v.like_count ?? null, v.comment_count ?? null, v.share_count ?? null, openId); n++; }
     cursor = d.cursor; hasMore = !!d.has_more && (d.videos || []).length > 0;
   }
   return { synced: n };
 }
-export function tiktokVideos({ limit = 50 } = {}) {
-  const rows = db.prepare('SELECT * FROM tiktok_videos ORDER BY published_at DESC LIMIT ?').all(limit);
+export function tiktokVideos({ limit = 50, account = null } = {}) {
+  const acct = account ? accounts.resolve('tiktok', account) : null;
+  if (account && !acct) return []; // that brand has no TikTok account
+  const rows = acct ? db.prepare('SELECT * FROM tiktok_videos WHERE open_id = ? ORDER BY published_at DESC LIMIT ?').all(acct.account_id, limit) : db.prepare('SELECT * FROM tiktok_videos ORDER BY published_at DESC LIMIT ?').all(limit);
   const med = median(rows.map(r => r.views || 0)) || 1;
   return rows.map(r => ({ ...r, x: +((r.views || 0) / med).toFixed(2), viewsPerDay: r.published_at ? Math.round((r.views || 0) / Math.max(1, (Date.now() - Date.parse(r.published_at)) / 86400e3)) : null, engagement: r.views ? +(((r.likes || 0) + (r.comments || 0) + (r.shares || 0)) / r.views * 100).toFixed(2) : null }));
 }
@@ -259,8 +296,8 @@ export async function tiktokPublish({ file, title = '', privacy, allowComment = 
   const id = st.publicaly_available_post_id?.[0] || st.publicly_available_post_id?.[0] || null;
   const audited = getSetting('tt_audited', '0') === '1';
   log(audited ? `published${id ? ' ' + id : ''}` : `published${id ? ' ' + id : ''} — app not audited by TikTok yet, so the video is private ("Only me"); make it public in the TikTok app or mark the app audited in Settings once approved`);
-  const user = getSetting('tt_username');
+  const user = accounts.current('tiktok')?.username || '';
   return { id, url: id && user ? `https://www.tiktok.com/@${user}/video/${id}` : null, privacy: level, audited };
 }
 
-export function status() { return { instagram: { configured: !!getSetting('ig_user_id'), accounts: db.prepare('SELECT COUNT(*) n FROM ig_accounts').get().n, posts: db.prepare('SELECT COUNT(*) n FROM ig_account_media').get().n }, tiktok: { ...tiktokStatus(), videos: db.prepare('SELECT COUNT(*) n FROM tiktok_videos').get().n } }; }
+export function status() { return { instagram: { configured: !!accounts.current('instagram')?.token, accounts: db.prepare('SELECT COUNT(*) n FROM ig_accounts').get().n, posts: db.prepare('SELECT COUNT(*) n FROM ig_account_media').get().n }, tiktok: { ...tiktokStatus(), videos: db.prepare('SELECT COUNT(*) n FROM tiktok_videos').get().n } }; }

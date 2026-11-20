@@ -41,7 +41,7 @@ async function startServer() {
   port ??= 5700 + Math.floor(Math.random() * 250);
   base = `http://127.0.0.1:${port}`;
   const M = `http://127.0.0.1:${mock.port}`;
-  child = spawn(process.execPath, ['src/server.js'], { cwd: ROOT, env: { ...process.env, PORT: String(port), TUBEDESK_DATA_DIR: dataDir, TUBEDESK_NO_SCHEDULER: '1', TZ: 'America/New_York',
+  child = spawn(process.execPath, ['src/server.js'], { cwd: ROOT, env: { ...process.env, PORT: String(port), TUBEDESK_DATA_DIR: dataDir, TUBEDESK_NO_SCHEDULER: '1', TUBEDESK_NO_AUTOCONNECT: '1', TZ: 'America/New_York',
     YT_API_BASE: `${M}/youtube/v3`, YT_ANALYTICS_BASE: `${M}/v2/reports`, YT_SUGGEST_URL: `${M}/complete/search`, YT_UPLOAD_BASE: `${M}/upload`, YT_REPORTING_BASE: `${M}/reporting/v1`, IG_GRAPH_BASE: `${M}/ig` }, stdio: ['ignore', 'pipe', 'pipe'] });
   child.stderr.on('data', d => process.stderr.write('[server] ' + d));
   for (let i = 0; i < 80; i++) { try { await fetch(base + '/api/status'); break; } catch { await new Promise(r => setTimeout(r, 100)); } }
@@ -71,7 +71,7 @@ test('engine status reports the local transcriber', async () => {
   assert.equal(s.engine.modelReady, true);
   assert.equal(s.engine.ready, !!FFMPEG);
   assert.equal(s.instagram, true);
-  assert.deepEqual(s.settings.platforms, ['youtube', 'instagram']);
+  assert.deepEqual(s.settings.platforms, ['youtube', 'instagram', 'tiktok']);
 });
 
 test('local transcription: ffmpeg → whisper word timings, cached, used as a source file lookup', { skip: !FFMPEG }, async () => {

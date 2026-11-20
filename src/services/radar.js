@@ -725,16 +725,17 @@ export function expectedAt(channelId, isShort, h, excludeId = null) {
   const isIg = String(channelId).startsWith('ig:');
   // Reels collect most of their views in the first day or two, so their curve is flatter than YouTube's.
   const exp = isIg ? Number(getSetting('radar_curve_exponent_ig', 0.35)) : Number(getSetting('radar_curve_exponent', 0.6));
-  const pool = isIg ? igPeers(excludeId) : peers.map(p => ({ ageH: (Date.now() - Date.parse(p.published_at)) / HOUR, views: p.view_count }));
+  const pool = isIg ? igPeers(excludeId, String(channelId).slice(3)) : peers.map(p => ({ ageH: (Date.now() - Date.parse(p.published_at)) / HOUR, views: p.view_count }));
   const est = pool.filter(p => p.ageH >= (isIg ? 7 : 14) * 24 && p.ageH <= 180 * 24)
     .map(p => p.views * Math.min(1, (h / p.ageH)) ** exp);
   if (est.length >= 3) return { expected: median(est), source: `estimate from ${est.length} uploads' current views on a front-loaded curve (no launch history yet — accuracy improves as hourly ticks accumulate)`, peers: est.length, confidence: 'low' };
   return { expected: null, source: 'not enough earlier uploads to form a baseline', peers: 0, confidence: 'none' };
 }
 
-function igPeers(excludeId) {
+function igPeers(excludeId, accountId = null) {
   if (!db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'ig_media'").get()) return [];
-  return db.prepare("SELECT published_at, views FROM ig_media WHERE id != ? AND views IS NOT NULL AND (product_type = 'REELS' OR media_type = 'VIDEO')").all(String(excludeId || '').replace(/^ig:/, ''))
+  const acct = accountId && accountId !== 'unknown' ? accountId : null;
+  return db.prepare("SELECT published_at, views FROM ig_media WHERE id != ? AND (? IS NULL OR ig_user_id = ?) AND views IS NOT NULL AND (product_type = 'REELS' OR media_type = 'VIDEO')").all(String(excludeId || '').replace(/^ig:/, ''), acct, acct)
     .map(r => ({ ageH: (Date.now() - Date.parse(r.published_at)) / HOUR, views: r.views }));
 }
 
@@ -875,13 +876,18 @@ async function watchTickInner({ log = () => {} } = {}) {
   if (getSetting('radar_watch_instagram', '1') === '1') {
     try {
       const igw = await import('./igwatch.js');
-      if (igw.configured()) {
-        const igDays = Number(getSetting('radar_watch_ig_days', 3));
-        const igCh = igw.igChannelId();
-        const owner = owned[0]?.id || null;
+      const accts = await import('./accounts.js');
+      const igDays = Number(getSetting('radar_watch_ig_days', 3));
+      // Every Instagram account, each paced against its own earlier reels; alerts go to the brand it's linked to.
+      for (const acct of accts.rows('instagram').filter(a => a.token)) await accts.withAccount('instagram', acct, async () => {
+        const igCh = igw.igChannelId(acct.account_id);
+        const owner = (acct.channel_id && owned.find(o => o.id === acct.channel_id)?.id) || owned[0]?.id || null;
+        const handle = acct.username ? `@${acct.username}` : 'Instagram';
         // First run (or after a reset): pull insights for older reels too so new ones have a baseline right away.
-        const fresh = igw.peers().filter(p => p.ageH >= 7 * 24).length < 5;
-        const synced = await igw.syncMedia(fresh ? { limit: 25 } : { limit: 10, insightsDays: igDays });
+        const fresh = igw.peers(null, acct.account_id).filter(p => p.ageH >= 7 * 24).length < 5;
+        let synced = [];
+        try { synced = await igw.syncMedia(fresh ? { limit: 25 } : { limit: 10, insightsDays: igDays }); }
+        catch (e) { summary.errors.push(`instagram ${handle}: ${e.message}`); return; }
         for (const m of synced) {
           if (m.views === null || m.views === undefined || !m.published_at) continue;
           const ageH = (now - Date.parse(m.published_at)) / HOUR;
@@ -899,11 +905,11 @@ async function watchTickInner({ log = () => {} } = {}) {
             .run(new Date(now).toISOString(), ageH, m.views, m.likes, m.comments, base.expected, index, index, status, base.source, base.confidence, vid);
           summary.watched++;
           if (status === 'breakout' && !existing?.alerted_breakout) {
-            summary.alerts.push(addAlert(owner, 'ig_breakout', `Instagram: "${title}" is at ${index.toFixed(1)}× your usual reel pace after ${Math.round(ageH)}h. Reply to comments now, pin it to your profile grid, and post a follow-up while it's hot.`, { url: m.permalink, mediaId: m.id, x: index, ageHours: ageH }));
+            summary.alerts.push(addAlert(owner, 'ig_breakout', `Instagram: "${title}" is at ${index.toFixed(1)}× your usual reel pace after ${Math.round(ageH)}h${accts.rows('instagram').length > 1 ? ` (${handle})` : ''}. Reply to comments now, pin it to your profile grid, and post a follow-up while it's hot.`, { url: m.permalink, mediaId: m.id, x: index, ageHours: ageH, account: acct.username }));
             db.prepare('UPDATE radar_watch SET alerted_breakout = 1 WHERE video_id = ?').run(vid);
           }
         }
-      }
+      });
     } catch (e) { summary.errors.push('instagram: ' + e.message); }
   }
 

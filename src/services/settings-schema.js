@@ -55,7 +55,7 @@ export const SCHEMA = [
   bool('clips_enabled', 'shorts', 'Cut Shorts automatically when a long-form upload breaks out.', '1'),
   S('clips_count', 'shorts', 'int', 'Shorts per breakout.', { default: 3, min: 1, max: 6 }),
   S('clips_publish', 'shorts', 'enum', 'After cutting: schedule automatically or wait for review.', { values: ['auto', 'review'], default: 'auto' }),
-  S('clips_platforms', 'shorts', 'list', 'Where Shorts go: youtube, instagram (comma-separated).', { values: ['youtube', 'instagram'], default: 'youtube,instagram' }),
+  S('clips_platforms', 'shorts', 'list', 'Where Shorts go: youtube, instagram, tiktok (comma-separated). Each brand posts to the Instagram/TikTok account linked to its YouTube channel.', { values: ['youtube', 'instagram', 'tiktok'], default: 'youtube,instagram,tiktok' }),
   S('clips_min_seconds', 'shorts', 'int', 'Shortest clip.', { default: 15, min: 5, max: 60 }),
   S('clips_max_seconds', 'shorts', 'int', 'Longest clip.', { default: 58, min: 10, max: 180 }),
   S('whisper_model_name', 'shorts', 'enum', 'Speech model for local transcription (downloads once).', { values: ['base.en', 'small.en', 'medium.en', 'small', 'medium'], default: 'small.en' }),
@@ -71,8 +71,8 @@ export const SCHEMA = [
   S('cloudflared_path', 'publishing', 'path', 'Path to cloudflared (temporary public links for Instagram uploads).', { local: true }),
   S('public_base_url', 'publishing', 'url', 'Public URL that reaches TubeDesk (for Instagram media). Blank = the remote-access address or a temporary tunnel.', { local: true }),
   // instagram
-  S('ig_access_token', 'instagram', 'secret', 'Instagram API (Instagram Login) access token for your professional account.'),
-  S('ig_user_id', 'instagram', 'string', 'Instagram professional account user id.'),
+  S('ig_access_token', 'instagram', 'secret', 'Instagram API (Instagram Login) access token for your professional account.', { local: true }),
+  S('ig_user_id', 'instagram', 'string', 'Instagram professional account user id.', { local: true }),
   S('ig_username', 'instagram', 'string', 'Instagram username (display only).'),
   // tiktok
   S('tt_client_key', 'tiktok', 'string', 'TikTok developer app client key.'),
@@ -108,6 +108,8 @@ export const SCHEMA = [
   S('port', 'system', 'int', 'Local port (restart needed).', { local: true, default: 4949 }),
   S('remote_port', 'system', 'int', 'Local port of the public AI endpoint that Tailscale Funnel forwards to (restart needed).', { local: true, default: 4950 }),
   S('tailscale_path', 'system', 'path', 'Path to the tailscale CLI (blank = auto-detect).', { local: true }),
+  S('ai_autoconnect', 'system', 'bool', 'Connect TubeDesk to every AI app on this Mac (Claude, Claude Code, Codex, Cursor, Gemini, Copilot, Windsurf, LM Studio) at every start.', { local: true, default: '1' }),
+  S('remote_auto', 'system', 'bool', 'Turn remote access on by itself once Tailscale is signed in.', { local: true, default: '1' }),
 ];
 export const BY_KEY = Object.fromEntries(SCHEMA.map(s => [s.key, s]));
 export const SECRET = new Set(SCHEMA.filter(s => s.type === 'secret').map(s => s.key));

@@ -12,9 +12,10 @@
     main.querySelector('#weekly').onclick = async e => { busy(e.target, true); try { const r = await api('/portfolio/weekly-summary', { method: 'POST', body: { send: true } }); toast(r.sent?.sent?.length ? `Sent via ${r.sent.sent.join(' + ')}` : r.sent?.skipped ? `Not sent: ${r.sent.skipped} (Virality radar → Autopilot → Phone alerts)` : 'Summary built', 'ok'); } catch (x2) { err(x2); } busy(e.target, false); };
     let o;
     try { o = await api('/portfolio'); } catch (e) { main.querySelector('#pf').innerHTML = h`<div class="note bad">${e.message}</div>`; return; }
+    window.__pfChannels = Object.fromEntries(o.channels.map(c => [c.id, c.title]));
     if (!o.channels.length) { main.querySelector('#pf').innerHTML = empty('No owned channels yet.', h`<br><a href="#/channels">Add your channels</a>`); return; }
     main.querySelector('#pf').innerHTML = h`<div class="grid g4" style="margin-bottom:14px">${raw(stat('Channels', o.channels.length))}${raw(stat('Subscribers', fmt(o.totals.subscribers)))}${raw(stat('Views this week', o.totals.views7 === null ? '—' : fmt(o.totals.views7)))}${raw(stat('Open alerts', o.totals.alertsOpen))}</div>
-      <div class="pf-grid">${o.channels.map(card).join('')}${o.instagram ? igCard(o.instagram) : ''}</div>
+      <div class="pf-grid">${o.channels.map(card).join('')}${(o.social || []).map(socialCard).join('')}</div>
       <div class="src">Week-over-week growth comes from TubeDesk's daily snapshots (it needs two weeks of snapshots to compare). Monetization progress needs the channel connected with Google.</div>`;
   });
 
@@ -36,8 +37,15 @@
       ${c.topGainers.length ? h`<div class="mini" style="margin-top:8px"><b>Most views this week:</b> ${c.topGainers.map(v => h`${v.title.slice(0, 40)} (+${fmt(v.gained)})`).join(' · ')}</div>` : ''}
     </div>`;
   }
+  function socialCard(s) {
+    if (s.platform === 'instagram') return igCard(s);
+    return h`<div class="card pf-card"><div class="pf-head"><div><h2 style="margin:0">TikTok${s.username ? ' @' + s.username : ''}</h2><div class="mini">${brand(s)}</div></div></div>
+      <div class="kv"><b>Videos this week</b><span>${s.videos7}</span><b>Views this week</b><span>${fmtFull(s.views7)}</span>
+        <b>Best this week</b><span>${s.best ? h`${s.best.permalink ? h`<a href="${s.best.permalink}" target="_blank" rel="noopener">${s.best.caption || 'video'}</a>` : s.best.caption} · ${fmtFull(s.best.views)}` : '—'}</span></div></div>`;
+  }
+  const brand = s => s.channelId ? `Linked to ${(window.__pfChannels || {})[s.channelId] || 'a channel'}` : 'Not linked to a channel';
   function igCard(i) {
-    return h`<div class="card pf-card"><div class="pf-head"><div><h2 style="margin:0">Instagram${i.username ? ' @' + i.username : ''}</h2><div class="mini">Reels</div></div></div>
+    return h`<div class="card pf-card"><div class="pf-head"><div><h2 style="margin:0">Instagram${i.username ? ' @' + i.username : ''}</h2><div class="mini">Reels · ${brand(i)}</div></div></div>
       <div class="kv"><b>Reels this week</b><span>${i.reels7}</span><b>Views this week</b><span>${fmtFull(i.views7)}</span>
         <b>Latest reel</b><span>${i.latestStatus ? h`<span class="badge ${statusClass(i.latestStatus)}">${i.latestStatus} ${x(i.latestPace)}</span>` : '—'}</span>
         <b>Best this week</b><span>${i.best ? h`<a href="${i.best.permalink}" target="_blank" rel="noopener">${i.best.caption || 'reel'}</a> · ${fmtFull(i.best.views)}` : '—'}</span></div></div>`;

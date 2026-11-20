@@ -5,7 +5,7 @@ description: >
   "is my upload doing well", "why are my views down", "check my CTR", "weekly review", "how are all my channels",
   "am I close to monetization", or wants a channel diagnosis, using TubeDesk analytics, the live radar watch and the CTR feed.
 metadata:
-  version: "1.9.0"
+  version: "2.0.0"
 ---
 
 # Channel checkup

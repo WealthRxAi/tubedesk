@@ -5,6 +5,8 @@ const CH = {
   UCowner00000000000000001: { id: 'UCowner00000000000000001', title: 'The Parent Plan', handle: '@TheParentPlan', subs: 1240, views: 184000, videos: 24, country: 'US' },
   UCcomp000000000000000002: { id: 'UCcomp000000000000000002', title: 'Caregiver Money', handle: '@CaregiverMoney', subs: 48000, views: 6200000, videos: 140, country: 'US' },
   UCcomp000000000000000003: { id: 'UCcomp000000000000000003', title: 'Elder Law Explained', handle: '@ElderLawExplained', subs: 9100, views: 900000, videos: 60, country: 'CA' },
+  // A second brand of the owner (multi-brand tests); hidden from search so other fixtures don't change.
+  UCboo0000000000000000004: { id: 'UCboo0000000000000000004', title: 'BooCrew', handle: '@BooCrew', subs: 800, views: 40000, videos: 10, country: 'US', hidden: true },
 };
 const titles = ['Medicaid Pays This, Not This', '7 Mistakes Families Make With Assisted Living', 'How to Protect a Parent\'s House From Medicaid', 'What Happens When Savings Run Out', 'Power of Attorney Explained in 6 Minutes', 'Is a Trust Worth It for Aging Parents?', 'VA Aid and Attendance: Who Qualifies', 'The Nursing Home Bill Nobody Warns You About', 'I Read 40 Medicaid Denials — Here Is the Pattern', 'Assisted Living vs Memory Care Costs', 'Stop Paying for These Senior Services', 'Why Estate Recovery Shocks Families', 'Long-Term Care Insurance: Honest Review', 'Caregiver Burnout Costs More Than You Think', 'How to Talk to Parents About Money #shorts', 'The 5-Year Lookback Rule #shorts'];
 function vid(chId, i) {
@@ -126,7 +128,11 @@ export function startMock(port = 0) {
     if (u.pathname.endsWith('/upload/thumbnails/set')) { req.on('data', () => {}); return req.on('end', () => json({ items: [{ default: { url: 'x' } }] })); }
     if (u.pathname.includes('/ig/')) {
       const p = u.pathname.split('/ig/')[1];
-      if (p === 'me') return json({ id: '17841400000000001', username: 'salstack.ai', account_type: 'BUSINESS', media_count: 12 });
+      if (p === 'me') {
+        if (String(q.access_token || '').startsWith('IGTOKEN_BOO')) return json({ user_id: '17841400000000002', id: '17841400000000002', username: 'boocrew', account_type: 'BUSINESS', media_count: 4 });
+        if (String(q.access_token || '').startsWith('BAD')) return json({ error: { message: 'Invalid OAuth access token', code: 190 } }, 400);
+        return json({ user_id: '17841400000000001', id: '17841400000000001', username: 'salstack.ai', account_type: 'BUSINESS', media_count: 12 });
+      }
       if (p === '17841400000000001' && /business_discovery/.test(q.fields || '')) {
         const u = (q.fields.match(/username\(([^)]+)\)/) || [])[1];
         if (u === 'nobody') return json({ error: { message: '(#110) Could not find the user', code: 110 } }, 400);
@@ -136,6 +142,8 @@ export function startMock(port = 0) {
       if (p === 'ig_hashtag_search') return json({ data: [{ id: 'HT_' + q.q }] });
       if (/^HT_.*\/(top|recent)_media$/.test(p)) return json({ data: Array.from({ length: 5 }, (_, i) => ({ id: `ht${i}`, caption: `#${q.q || 'tag'} post ${i}`, media_type: 'VIDEO', media_product_type: 'REELS', permalink: `https://www.instagram.com/p/ht${i}/`, timestamp: new Date().toISOString().replace(/\.\d{3}Z$/, '+0000'), like_count: 1000 * (i + 1), comments_count: 50 })) });
       if (p === 'refresh_access_token') return json({ access_token: 'IG_REFRESHED', token_type: 'bearer', expires_in: 5184000 });
+      if (p.endsWith('/media') && req.method === 'GET' && p.startsWith('17841400000000002')) return json({ data: [{ id: 'BOOREEL1', caption: 'Boo reel', media_type: 'VIDEO', media_product_type: 'REELS', timestamp: new Date(Date.now() - 30 * 3600000).toISOString().replace(/\.\d+Z$/, '+0000'), permalink: 'https://www.instagram.com/reel/BOOREEL1/', like_count: 10, comments_count: 1 }] });
+      if (p === 'BOOREEL1/insights') return json({ data: [['views', 900], ['reach', 600], ['saved', 3], ['shares', 2], ['total_interactions', 20]].map(([name, v]) => ({ name, period: 'lifetime', values: [{ value: v }] })) });
       if (p.endsWith('/media') && req.method === 'GET') return json({ data: IG.media.map(m => ({ id: m.id, caption: m.caption, media_type: 'VIDEO', media_product_type: 'REELS', timestamp: new Date(Date.now() - m.ageH * 3600000).toISOString().replace(/\.\d+Z$/, '+0000'), permalink: `https://www.instagram.com/reel/${m.id}/`, thumbnail_url: `${THUMB_BASE}/vi/${m.id}/ig.jpg`, like_count: Math.round(m.views * 0.05), comments_count: Math.round(m.views * 0.004) })).slice(0, Number(q.limit || 25)) });
       if (/\/insights$/.test(p)) { const m = IG.media.find(x => x.id === p.split('/')[0]); if (!m) return json({ error: { message: 'no media' } }, 400); return json({ data: [['views', m.views], ['reach', Math.round(m.views * 0.7)], ['saved', Math.round(m.views * 0.01)], ['shares', Math.round(m.views * 0.008)], ['total_interactions', Math.round(m.views * 0.07)]].map(([name, v]) => ({ name, period: 'lifetime', values: [{ value: v }] })) }); }
       if (p.endsWith('/media')) { calls.at(-1).igMedia = q; return json({ id: 'CONTAINER1' }); }
@@ -150,9 +158,12 @@ export function startMock(port = 0) {
       return req.on('end', () => {
         const body = (() => { try { return JSON.parse(b || '{}'); } catch { return Object.fromEntries(new URLSearchParams(b)); } })();
         calls.at(-1).ttBody = body;
-        if (p === 'oauth/token/') return json({ access_token: 'TT_ACCESS_' + (body.grant_type || ''), refresh_token: 'TT_REFRESH', open_id: 'open123', expires_in: 86400, scope: 'user.info.basic,video.list,video.publish' });
+        // Second TikTok account: code CODE_BOO → open_id openBoo; tokens carry the open_id so later calls know who.
+        const openId = body.code === 'CODE_BOO' || /openBoo/.test(body.refresh_token || '') ? 'openBoo' : 'open123';
+        if (p === 'oauth/token/') return json({ access_token: 'TT_ACCESS_' + (body.grant_type || '') + '_' + openId, refresh_token: 'TT_REFRESH' + (openId === 'openBoo' ? '_openBoo' : ''), open_id: openId, expires_in: 86400, scope: 'user.info.basic,video.list,video.publish' });
         if (!/^Bearer TT_ACCESS_/.test(req.headers.authorization || '')) return json({ error: { code: 'access_token_invalid', message: 'bad token' } }, 401);
-        if (p === 'user/info/') return json({ data: { user: { open_id: 'open123', username: 'salstack', display_name: 'SalStack', follower_count: 1500, following_count: 10, likes_count: 9000, video_count: 3 } }, error: { code: 'ok' } });
+        calls.at(-1).ttAccount = /openBoo/.test(req.headers.authorization) ? 'openBoo' : 'open123';
+        if (p === 'user/info/') return json({ data: { user: /openBoo/.test(req.headers.authorization) ? { open_id: 'openBoo', username: 'boocrew.tt', display_name: 'BooCrew', follower_count: 300, following_count: 1, likes_count: 900, video_count: 1 } : { open_id: 'open123', username: 'salstack', display_name: 'SalStack', follower_count: 1500, following_count: 10, likes_count: 9000, video_count: 3 } }, error: { code: 'ok' } });
         if (p === 'video/list/') return json({ data: { videos: [1, 2, 3].map(i => ({ id: 'v' + i, title: 'tt ' + i, create_time: Math.floor(Date.now() / 1000) - i * 86400 * 3, duration: 30, cover_image_url: 'https://example.test/c.jpg', share_url: 'https://www.tiktok.com/@salstack/video/v' + i, view_count: i === 2 ? 50000 : 1000, like_count: 100, comment_count: 5, share_count: 7 })), cursor: 0, has_more: false }, error: { code: 'ok' } });
         if (p === 'post/publish/creator_info/query/') return json({ data: { creator_username: 'salstack', privacy_level_options: ['PUBLIC_TO_EVERYONE', 'SELF_ONLY'], max_video_post_duration_sec: 600 }, error: { code: 'ok' } });
         if (p === 'post/publish/video/init/') { calls.at(-1).ttInit = body; return json({ data: { publish_id: 'pub1', upload_url: `http://127.0.0.1:${server.address().port}/tt-upload` }, error: { code: 'ok' } }); }
@@ -203,7 +214,7 @@ export function startMock(port = 0) {
     }
     if (u.pathname.endsWith('/search')) {
       const items = [];
-      if (q.type === 'channel') for (const c of Object.values(CH)) items.push({ id: { channelId: c.id }, snippet: { channelId: c.id, title: c.title } });
+      if (q.type === 'channel') for (const c of Object.values(CH).filter(x => !x.hidden)) items.push({ id: { channelId: c.id }, snippet: { channelId: c.id, title: c.title } });
       else for (const chId of Object.keys(CH)) for (let i = 0; i < 8; i++) { const v = vid(chId, i); items.push({ id: { videoId: v.id }, snippet: { channelId: chId, title: v.title } }); }
       return json({ items, pageInfo: { totalResults: 48213 } });
     }

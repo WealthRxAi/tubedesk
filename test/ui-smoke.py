@@ -10,7 +10,7 @@ subprocess.run(['pkill', '-f', 'node test/mock-youtube.js']); subprocess.run(['p
 import atexit; atexit.register(lambda: [p.kill() for p in (mock, srv)])
 env = dict(os.environ, MOCK_PORT=str(mock_port))
 mock = subprocess.Popen([sys.executable and 'node', 'test/mock-youtube.js'], cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-env2 = dict(os.environ, PORT=str(port), TUBEDESK_DATA_DIR=data, TUBEDESK_NO_SCHEDULER='1', YT_API_BASE=f'http://127.0.0.1:{mock_port}/youtube/v3', YT_ANALYTICS_BASE=f'http://127.0.0.1:{mock_port}/v2/reports', YT_SUGGEST_URL=f'http://127.0.0.1:{mock_port}/complete/search', YT_REPORTING_BASE=f'http://127.0.0.1:{mock_port}/reporting/v1', YT_UPLOAD_BASE=f'http://127.0.0.1:{mock_port}/upload', IG_GRAPH_BASE=f'http://127.0.0.1:{mock_port}/ig')
+env2 = dict(os.environ, PORT=str(port), TUBEDESK_DATA_DIR=data, TUBEDESK_NO_SCHEDULER='1', TUBEDESK_NO_AUTOCONNECT='1', YT_API_BASE=f'http://127.0.0.1:{mock_port}/youtube/v3', YT_ANALYTICS_BASE=f'http://127.0.0.1:{mock_port}/v2/reports', YT_SUGGEST_URL=f'http://127.0.0.1:{mock_port}/complete/search', YT_REPORTING_BASE=f'http://127.0.0.1:{mock_port}/reporting/v1', YT_UPLOAD_BASE=f'http://127.0.0.1:{mock_port}/upload', IG_GRAPH_BASE=f'http://127.0.0.1:{mock_port}/ig')
 srv = subprocess.Popen(['node', 'src/server.js'], cwd=ROOT, env=env2, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 base = f'http://127.0.0.1:{port}'
 

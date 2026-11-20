@@ -5,7 +5,7 @@ description: >
   "repurpose this upload", "clip the best moments", "what Shorts are scheduled", or "cancel that Short",
   using TubeDesk's Shorts pipeline (local transcription, radar-scored moments, captioned 9:16 clips, best-slot scheduling).
 metadata:
-  version: "1.9.0"
+  version: "2.0.0"
 ---
 
 # Shorts from long-form uploads
